@@ -541,7 +541,7 @@ export function App() {
     captureGateRef.current.reset();
   }, [removeObservationData]);
 
-  const openCamera = useCallback(async () => {
+  const openCamera = useCallback(async (deviceId = selectedDeviceId) => {
     setError(undefined);
     setStatus("Requesting camera access…");
     setStream(undefined);
@@ -550,7 +550,7 @@ export function App() {
     try {
       const nextStream = await cameraRef.current.open({
         ...requestedSize,
-        deviceId: selectedDeviceId || undefined,
+        deviceId: deviceId || undefined,
         frameRate: 30,
       });
       const settings = cameraRef.current.settings();
@@ -584,6 +584,14 @@ export function App() {
       setError(errorText(cameraError));
     }
   }, [requestedSize, selectedDeviceId, clearObservations]);
+
+  const selectCamera = useCallback(
+    (deviceId: string) => {
+      setSelectedDeviceId(deviceId);
+      if (stream) void openCamera(deviceId);
+    },
+    [openCamera, stream],
+  );
 
   const applyZoom = useCallback(async (zoom: number) => {
     try {
@@ -913,7 +921,7 @@ export function App() {
                 {stream ? <video ref={attachPreview} autoplay muted playsinline /> : <div class="empty-preview"><p>No camera connected</p></div>}
               </div>
               <div class="form-grid">
-                <label class="field span-two"><span>Camera</span><select value={selectedDeviceId} onChange={(event) => setSelectedDeviceId(event.currentTarget.value)}><option value="">Default camera</option>{devices.map((device, index) => <option value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>)}</select></label>
+                <label class="field span-two"><span>Camera</span><select value={selectedDeviceId} onChange={(event) => selectCamera(event.currentTarget.value)}><option value="">Default camera</option>{devices.map((device, index) => <option value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>)}</select></label>
                 <label class="field span-two"><span>Requested resolution</span><select value={`${requestedSize.width}x${requestedSize.height}`} onChange={(event) => { const [width, height] = event.currentTarget.value.split("x").map(Number); setRequestedSize({ width, height }); }}>{RESOLUTION_PRESETS.map((size) => <option value={`${size.width}x${size.height}`}>{size.label}</option>)}</select></label>
                 <label class="field span-two"><span>Lens model</span><select value={session.lensModel} onChange={(event) => setSession((previous) => updated(previous, { lensModel: event.currentTarget.value as LensModel, result: undefined }))}><option value="pinhole-radtan5">Standard lens · radial/tangential 5</option><option value="fisheye-kb4">Fisheye · four coefficients</option></select></label>
               </div>
