@@ -46,7 +46,7 @@ npm run check
 npm run build
 ```
 
-The WebAssembly build is intentionally single-threaded. This keeps the application compatible with ordinary GitHub Pages hosting without requiring cross-origin isolation headers. Pixel processing runs in a dedicated module worker, and frames are downscaled to a maximum 1920-pixel working edge before detection.
+The WebAssembly build is intentionally single-threaded. This keeps the application compatible with ordinary GitHub Pages hosting without requiring cross-origin isolation headers. Detection runs in a dedicated module worker, and frames are downscaled to a maximum 1920-pixel working edge. The corrected live preview runs in WebGL2 at the camera frame cadence, with the OpenCV worker retained as a fallback.
 
 ## GitHub Pages
 

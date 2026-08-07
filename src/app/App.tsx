@@ -44,6 +44,7 @@ import {
   saveActiveSession,
   storageHeadroom,
 } from "../lib/session-db";
+import { WebGlUndistortRenderer } from "../lib/undistort-webgl";
 import { CalibrationWorkerClient } from "../worker/client";
 
 const MAX_IMPORT_FILES = 100;
@@ -374,13 +375,72 @@ function LiveResultPreview({
   }, [stream]);
 
   useEffect(() => {
-    if (!stream || !worker || !corrected) return;
+    setPreviewError(undefined);
+    if (!stream || !corrected) return;
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+
+    let gpuRenderer: WebGlUndistortRenderer | undefined;
+    try {
+      gpuRenderer = WebGlUndistortRenderer.create(canvas);
+    } catch (error) {
+      setPreviewError(errorText(error));
+      return;
+    }
+
+    if (gpuRenderer) {
+      let cancelled = false;
+      let videoFrameHandle: number | undefined;
+      let animationHandle: number | undefined;
+      let lastVideoTime = Number.NEGATIVE_INFINITY;
+
+      const renderFrame = () => {
+        if (cancelled) return;
+        if (
+          video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+          video.currentTime !== lastVideoTime
+        ) {
+          try {
+            gpuRenderer?.render(video, result);
+            lastVideoTime = video.currentTime;
+          } catch (error) {
+            cancelled = true;
+            setPreviewError(errorText(error));
+            return;
+          }
+        }
+        scheduleFrame();
+      };
+
+      const scheduleFrame = () => {
+        if (cancelled) return;
+        if (video.requestVideoFrameCallback) {
+          videoFrameHandle = video.requestVideoFrameCallback(() => renderFrame());
+        } else {
+          animationHandle = requestAnimationFrame(renderFrame);
+        }
+      };
+
+      scheduleFrame();
+      return () => {
+        cancelled = true;
+        if (videoFrameHandle !== undefined) video.cancelVideoFrameCallback?.(videoFrameHandle);
+        if (animationHandle !== undefined) cancelAnimationFrame(animationHandle);
+        gpuRenderer?.dispose();
+      };
+    }
+
+    if (!worker) {
+      setPreviewError("WebGL2 is unavailable and the OpenCV preview is not ready.");
+      return;
+    }
+
     let cancelled = false;
     let inFlight = false;
     let timer = 0;
     const renderFrame = async () => {
       if (cancelled) return;
-      const video = videoRef.current;
       if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || inFlight) {
         timer = window.setTimeout(renderFrame, 200);
         return;
@@ -389,10 +449,11 @@ function LiveResultPreview({
       try {
         const bitmap = await createImageBitmap(video);
         const frame = await worker.undistort(bitmap, result);
-        if (!cancelled && canvasRef.current) {
-          const canvas = canvasRef.current;
-          canvas.width = frame.width;
-          canvas.height = frame.height;
+        if (!cancelled) {
+          if (canvas.width !== frame.width || canvas.height !== frame.height) {
+            canvas.width = frame.width;
+            canvas.height = frame.height;
+          }
           const pixels = new Uint8ClampedArray(frame.rgba.length);
           pixels.set(frame.rgba);
           canvas.getContext("2d")!.putImageData(
@@ -405,7 +466,7 @@ function LiveResultPreview({
         if (!cancelled) setPreviewError(errorText(error));
       } finally {
         inFlight = false;
-        timer = window.setTimeout(renderFrame, 250);
+        timer = window.setTimeout(renderFrame, 100);
       }
     };
     void renderFrame();
