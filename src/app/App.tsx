@@ -1359,8 +1359,7 @@ export function App() {
   return (
     <div class="app-shell">
       <header class="site-header">
-        <div class="brand"><strong>Lensbench</strong></div>
-        <div class="privacy-pill">Local processing</div>
+        <div class="brand"><strong>Web Camera Calibration Tool</strong></div>
       </header>
 
       <main>
@@ -1392,7 +1391,7 @@ export function App() {
                 </div>
                 <div class="button-row form-submit"><button type="submit" class="button primary" disabled={cameraBusy || Boolean(requestedResolution.error) || Boolean(stream && !requestedResolution.size)}>{cameraBusy ? "Working…" : stream ? "Apply exact mode" : "Connect camera"}</button></div>
               </form>
-              {session.captureSettings && <dl class="settings-summary"><div><dt>Actual stream</dt><dd>{session.captureSettings.width} × {session.captureSettings.height}</dd></div><div><dt>Frame rate</dt><dd>{session.captureSettings.frameRate?.toFixed(1) ?? "Browser default"}</dd></div><div><dt>Resize mode</dt><dd>{session.captureSettings.resizeMode ?? "Not reported"}</dd></div></dl>}
+              {session.captureSettings && <dl class="settings-summary"><div><dt>Actual stream</dt><dd>{session.captureSettings.width} × {session.captureSettings.height}</dd></div><div><dt>Frame rate</dt><dd>{session.captureSettings.frameRate?.toFixed(1) ?? "Browser default"}</dd></div><div><dt>Resize mode</dt><dd>{session.captureSettings.resizeMode ?? "Unverified"}</dd></div></dl>}
               {capabilities?.zoom && <label class="field"><span>Optical/digital zoom: {session.captureSettings?.zoom?.toFixed(1) ?? capabilities.zoom.min.toFixed(1)}×</span><input type="range" min={capabilities.zoom.min} max={capabilities.zoom.max} step={capabilities.zoom.step || 0.1} value={session.captureSettings?.zoom ?? capabilities.zoom.min} disabled={cameraBusy} onChange={(event) => void applyZoom(Number(event.currentTarget.value))} /></label>}
               {capabilities?.focusMode && <label class="field"><span>Focus mode</span><select value={session.captureSettings?.focusMode} disabled={cameraBusy} onChange={(event) => void applyFocusMode(event.currentTarget.value)}>{capabilities.focusMode.map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select></label>}
             </section>

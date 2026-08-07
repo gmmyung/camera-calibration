@@ -108,7 +108,6 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   border-bottom: 1px solid var(--line);
 }
 .brand strong { font-size: 15px; font-weight: 650; }
-.privacy-pill { color: var(--muted); font-size: 12px; }
 
 main { flex: 1; padding: 28px 0 48px; }
 .hero-copy {

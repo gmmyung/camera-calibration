@@ -30,7 +30,7 @@ function openDatabase(): Promise<IDBDatabase> {
     request.onerror = () => reject(request.error ?? new Error("Unable to open local storage."));
     request.onblocked = () => {
       blocked = true;
-      reject(new Error("Local storage is blocked by another open Lensbench tab."));
+      reject(new Error("Local storage is blocked by another open calibration tool tab."));
     };
   });
 }

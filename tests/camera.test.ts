@@ -108,15 +108,36 @@ describe("CameraController", () => {
     expect(constraints.resizeMode).toEqual({ exact: "none" });
   });
 
-  it("rejects browsers that cannot guarantee an unscaled stream", async () => {
-    const getUserMedia = vi.fn();
+  it("keeps exact dimensions but omits resizeMode when the browser does not support it", async () => {
+    const track = fakeTrack({ settings: { resizeMode: undefined } });
+    const getUserMedia = vi.fn().mockResolvedValue(fakeStream(track));
     Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: getUserMedia });
     Object.defineProperty(navigator.mediaDevices, "getSupportedConstraints", {
       value: vi.fn(() => ({ resizeMode: false })),
     });
 
-    await expect(new CameraController().open({})).rejects.toThrow("resizeMode is unsupported");
-    expect(getUserMedia).not.toHaveBeenCalled();
+    const controller = new CameraController();
+    await controller.open({ width: 1280, height: 720 });
+
+    const constraints = getUserMedia.mock.calls[0]![0].video;
+    expect(constraints.width).toEqual({ exact: 1280 });
+    expect(constraints.height).toEqual({ exact: 720 });
+    expect(constraints).not.toHaveProperty("resizeMode");
+    expect(controller.settings().resizeMode).toBeUndefined();
+
+    await controller.applyResolution({ width: 1280, height: 720 });
+    expect(track.applyConstraints.mock.calls[0]![0]).not.toHaveProperty("resizeMode");
+  });
+
+  it("rejects a stream when a supported browser does not confirm resizeMode none", async () => {
+    const track = fakeTrack({ settings: { resizeMode: "crop-and-scale" } });
+    const getUserMedia = vi.fn().mockResolvedValue(fakeStream(track));
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: getUserMedia });
+
+    await expect(new CameraController().open({ width: 1280, height: 720 })).rejects.toThrow(
+      "uncropped, unscaled",
+    );
+    expect(track.stop).toHaveBeenCalledOnce();
   });
 
   it("retries a transient camera capture failure once", async () => {

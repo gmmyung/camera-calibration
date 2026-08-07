@@ -38,13 +38,27 @@ type ExtendedSettings = MediaTrackSettings & {
   resizeMode?: string;
 };
 
-function videoConstraints(request: CameraRequest): ExtendedConstraints {
+function supportsResizeMode(): boolean {
+  const supported = navigator.mediaDevices.getSupportedConstraints?.() as
+    | ExtendedSupportedConstraints
+    | undefined;
+  return supported?.resizeMode === true;
+}
+
+function unscaledCaptureConstraint(supported: boolean): ExtendedConstraints {
+  return supported ? { resizeMode: { exact: "none" } } : {};
+}
+
+function videoConstraints(
+  request: CameraRequest,
+  resizeModeSupported: boolean,
+): ExtendedConstraints {
   return {
     deviceId: request.deviceId ? { exact: request.deviceId } : undefined,
     width: request.width === undefined ? undefined : { exact: request.width },
     height: request.height === undefined ? undefined : { exact: request.height },
     frameRate: request.frameRate ? { ideal: request.frameRate } : undefined,
-    resizeMode: { exact: "none" },
+    ...unscaledCaptureConstraint(resizeModeSupported),
   };
 }
 
@@ -128,13 +142,13 @@ export class CameraController {
     }
 
     validateRequest(request);
-    this.requireUnscaledCaptureSupport();
+    const resizeModeSupported = supportsResizeMode();
     const operationId = ++this.operationId;
     const releasedActiveStream = this.releaseActiveStream();
     if (releasedActiveStream) await wait(CAMERA_RELEASE_DELAY_MS);
     this.assertCurrent(operationId);
 
-    const capture = await this.acquireWithRetry(request, operationId);
+    const capture = await this.acquireWithRetry(request, operationId, resizeModeSupported);
 
     this.assertCurrent(operationId, capture.stream);
     this.stream = capture.stream;
@@ -144,17 +158,17 @@ export class CameraController {
 
   async applyResolution(size: ImageSize): Promise<CameraSettingsSnapshot> {
     validateImageSize(size);
-    this.requireUnscaledCaptureSupport();
+    const resizeModeSupported = supportsResizeMode();
     const track = this.requireTrack();
     const operationId = this.operationId;
     await track.applyConstraints({
       width: { exact: size.width },
       height: { exact: size.height },
-      resizeMode: { exact: "none" },
+      ...unscaledCaptureConstraint(resizeModeSupported),
     } as ExtendedConstraints);
     this.assertActiveTrack(operationId, track);
     const settings = this.settings();
-    this.assertExactSettings(settings, size);
+    this.assertExactSettings(settings, size, resizeModeSupported);
     return settings;
   }
 
@@ -163,15 +177,16 @@ export class CameraController {
     const track = this.requireTrack();
     const operationId = this.operationId;
     const current = this.settingsForTrack(track);
+    const resizeModeSupported = supportsResizeMode();
     await track.applyConstraints({
       width: { exact: current.width },
       height: { exact: current.height },
-      resizeMode: { exact: "none" },
+      ...unscaledCaptureConstraint(resizeModeSupported),
       advanced: [{ zoom }],
     } as ExtendedConstraints);
     this.assertActiveTrack(operationId, track);
     const settings = this.settings();
-    this.assertExactSettings(settings, current);
+    this.assertExactSettings(settings, current, resizeModeSupported);
     return settings;
   }
 
@@ -180,15 +195,16 @@ export class CameraController {
     const track = this.requireTrack();
     const operationId = this.operationId;
     const current = this.settingsForTrack(track);
+    const resizeModeSupported = supportsResizeMode();
     await track.applyConstraints({
       width: { exact: current.width },
       height: { exact: current.height },
-      resizeMode: { exact: "none" },
+      ...unscaledCaptureConstraint(resizeModeSupported),
       advanced: [{ focusMode }],
     } as ExtendedConstraints);
     this.assertActiveTrack(operationId, track);
     const settings = this.settings();
-    this.assertExactSettings(settings, current);
+    this.assertExactSettings(settings, current, resizeModeSupported);
     return settings;
   }
 
@@ -221,25 +237,27 @@ export class CameraController {
   private async acquireWithRetry(
     request: CameraRequest,
     operationId: number,
+    resizeModeSupported: boolean,
   ): Promise<{ stream: MediaStream; track: MediaStreamTrack }> {
     try {
-      return await this.acquire(request, operationId);
+      return await this.acquire(request, operationId, resizeModeSupported);
     } catch (error) {
       if (!isTransientCaptureFailure(error)) throw error;
       await wait(CAPTURE_RETRY_DELAY_MS);
       this.assertCurrent(operationId);
-      return this.acquire(request, operationId);
+      return this.acquire(request, operationId, resizeModeSupported);
     }
   }
 
   private async acquire(
     request: CameraRequest,
     operationId: number,
+    resizeModeSupported: boolean,
   ): Promise<{ stream: MediaStream; track: MediaStreamTrack }> {
     this.assertCurrent(operationId);
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
-      video: videoConstraints(request),
+      video: videoConstraints(request, resizeModeSupported),
     });
     this.assertCurrent(operationId, stream);
     const track = stream.getVideoTracks()[0];
@@ -260,23 +278,13 @@ export class CameraController {
         request.width === undefined || request.height === undefined
           ? undefined
           : { width: request.width, height: request.height },
+        resizeModeSupported,
       );
     } catch (error) {
       stopStream(stream);
       throw error;
     }
     return { stream, track };
-  }
-
-  private requireUnscaledCaptureSupport(): void {
-    const supported = navigator.mediaDevices.getSupportedConstraints?.() as
-      | ExtendedSupportedConstraints
-      | undefined;
-    if (!supported?.resizeMode) {
-      throw new Error(
-        "This browser cannot guarantee an uncropped, unscaled camera stream because resizeMode is unsupported.",
-      );
-    }
   }
 
   private settingsForTrack(track: MediaStreamTrack): CameraSettingsSnapshot {
@@ -301,8 +309,9 @@ export class CameraController {
   private assertExactSettings(
     settings: CameraSettingsSnapshot,
     requestedSize?: ImageSize,
+    resizeModeSupported = supportsResizeMode(),
   ): void {
-    if (settings.resizeMode !== "none") {
+    if (resizeModeSupported && settings.resizeMode !== "none") {
       throw new Error("The browser did not provide an uncropped, unscaled camera stream.");
     }
     if (

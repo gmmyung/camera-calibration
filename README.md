@@ -1,6 +1,6 @@
-# Lensbench
+# Web Camera Calibration Tool
 
-Lensbench is a private, browser-only monocular camera calibration tool. It captures or imports calibration views, detects ChArUco or chessboard targets with OpenCV WebAssembly, solves standard or fisheye intrinsics, validates the result live, and exports versioned JSON or OpenCV YAML.
+Web Camera Calibration Tool is a browser-only monocular camera calibration tool. It captures or imports calibration views, detects ChArUco or chessboard targets with OpenCV WebAssembly, solves standard or fisheye intrinsics, validates the result live, and exports versioned JSON or OpenCV YAML.
 
 There is no runtime server. Camera frames, imported images, observations, and results remain in the browser. The generated site can be hosted directly on GitHub Pages.
 
@@ -37,7 +37,7 @@ npm run dev
 
 The camera API requires HTTPS or `localhost`. If `public/wasm/calibration.js` and `calibration.wasm` have not been built, the UI loads but reports that the calibration engine is unavailable.
 
-The first connection leaves dimensions unset unless the user enters them, allowing the camera to choose its default native mode. Once connected, the width and height fields show the active mode and the track's reported bounds. Entered dimensions are required exactly; Lensbench does not fall back to browser-selected dimensions. Every camera request also requires `resizeMode: { exact: "none" }`, so browsers that cannot guarantee an uncropped, unscaled stream are rejected. **Actual stream** shows the settings used for calibration. Changing the camera, resolution, zoom, focus mode, or resize mode clears incompatible captures.
+The first connection leaves dimensions unset unless the user enters them, allowing the camera to choose its default mode. Once connected, the width and height fields show the active mode and the track's reported bounds. Entered dimensions are required exactly; the tool does not fall back to browser-selected dimensions. Where supported, camera requests also require `resizeMode: { exact: "none" }` and verify that setting. Browsers without `resizeMode` support can still connect, but the resize mode is shown as **Unverified** because the Web API cannot prove that the browser avoided cropping or downscaling. **Actual stream** shows the settings used for calibration. Changing the camera, resolution, zoom, focus mode, or resize mode clears incompatible captures.
 
 ## Verification
 
