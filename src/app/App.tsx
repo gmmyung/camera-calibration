@@ -249,15 +249,26 @@ function NumberField({
 function PatternEditor({
   pattern,
   onChange,
+  errors,
+  workerReady,
+  onDownload,
+  onStart,
 }: {
   pattern: PatternConfig;
   onChange: (pattern: PatternConfig) => void;
+  errors: string[];
+  workerReady: boolean;
+  onDownload: () => void;
+  onStart: () => void;
 }) {
   return (
     <section class="panel pattern-panel">
       <div class="panel-heading">
-        <h2>Target</h2>
-        <div class="segmented">
+        <h2>Calibration board</h2>
+      </div>
+      <div class="board-type">
+        <span>Board type</span>
+        <div class="segmented" role="group" aria-label="Board type">
           <button
             type="button"
             class={pattern.kind === "charuco" ? "selected" : ""}
@@ -280,21 +291,21 @@ function PatternEditor({
         {pattern.kind === "charuco" ? (
           <>
             <NumberField
-              label="Squares across"
+              label="Columns (squares)"
               value={pattern.squaresX}
               min={3}
               max={MAX_PATTERN_GRID_SIZE}
               onChange={(squaresX) => onChange({ ...pattern, squaresX })}
             />
             <NumberField
-              label="Squares down"
+              label="Rows (squares)"
               value={pattern.squaresY}
               min={3}
               max={MAX_PATTERN_GRID_SIZE}
               onChange={(squaresY) => onChange({ ...pattern, squaresY })}
             />
             <NumberField
-              label="Square length (mm)"
+              label="Square size (mm)"
               value={pattern.squareLengthMm}
               min={0.1}
               max={MAX_PATTERN_LENGTH_MM}
@@ -302,7 +313,7 @@ function PatternEditor({
               onChange={(squareLengthMm) => onChange({ ...pattern, squareLengthMm })}
             />
             <NumberField
-              label="Marker length (mm)"
+              label="Marker size (mm)"
               value={pattern.markerLengthMm}
               min={0.1}
               max={MAX_PATTERN_LENGTH_MM}
@@ -339,21 +350,21 @@ function PatternEditor({
         ) : (
           <>
             <NumberField
-              label="Inner corners across"
+              label="Columns (inner corners)"
               value={pattern.innerCornersX}
               min={3}
               max={MAX_PATTERN_GRID_SIZE}
               onChange={(innerCornersX) => onChange({ ...pattern, innerCornersX })}
             />
             <NumberField
-              label="Inner corners down"
+              label="Rows (inner corners)"
               value={pattern.innerCornersY}
               min={3}
               max={MAX_PATTERN_GRID_SIZE}
               onChange={(innerCornersY) => onChange({ ...pattern, innerCornersY })}
             />
             <NumberField
-              label="Square length (mm)"
+              label="Square size (mm)"
               value={pattern.squareLengthMm}
               min={0.1}
               max={MAX_PATTERN_LENGTH_MM}
@@ -362,6 +373,29 @@ function PatternEditor({
             />
           </>
         )}
+      </div>
+      {errors.length > 0 && (
+        <div class="pattern-errors" role="alert">
+          {errors.map((message) => <p key={message}>{message}</p>)}
+        </div>
+      )}
+      <div class="button-row pattern-actions">
+        <button
+          type="button"
+          class="button secondary"
+          disabled={!workerReady || errors.length > 0}
+          onClick={onDownload}
+        >
+          Download board SVG
+        </button>
+        <button
+          type="button"
+          class="button primary"
+          disabled={!workerReady || errors.length > 0}
+          onClick={onStart}
+        >
+          Start capture
+        </button>
       </div>
     </section>
   );
@@ -1378,9 +1412,9 @@ export function App() {
             <section class="panel camera-panel">
               <div class="panel-heading"><h2>Camera</h2><span class={stream ? "ready-dot" : "idle-dot"}>{stream ? "Ready" : "Not connected"}</span></div>
               <div class="camera-preview compact">
-                {stream ? <video ref={attachPreview} autoplay muted playsinline /> : <div class="empty-preview"><p>No camera connected</p></div>}
+                {stream ? <video ref={attachPreview} autoplay muted playsinline /> : <div class="empty-preview"><button type="button" class="button primary" disabled={cameraBusy || Boolean(requestedResolution.error)} onClick={() => void openCamera()}>{cameraBusy ? "Connecting…" : "Connect camera"}</button></div>}
               </div>
-              <form class="camera-form" onSubmit={(event) => { event.preventDefault(); void applyCameraSettings(); }}>
+              <div class="camera-controls">
                 <div class="form-grid">
                   <label class="field span-two"><span>Camera</span><select value={selectedDeviceId} disabled={cameraBusy} onChange={(event) => selectCamera(event.currentTarget.value)}><option value="">Default camera</option>{devices.map((device, index) => <option key={`${device.deviceId}-${index}`} value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>)}</select></label>
                   <label class="field"><span>Width</span><input type="number" inputMode="numeric" min={capabilities?.width?.min ?? 1} max={capabilities?.width?.max ?? MAX_CAMERA_DIMENSION} step={1} placeholder="Camera default" value={resolutionDraft.width} disabled={cameraBusy} onInput={(event) => setResolutionDraft((previous) => ({ ...previous, width: event.currentTarget.value }))} /></label>
@@ -1389,20 +1423,14 @@ export function App() {
                   {requestedResolution.error && <p class="field-error span-two">{requestedResolution.error}</p>}
                   <label class="field span-two"><span>Lens model</span><select value={session.lensModel} onChange={(event) => { const lensModel = event.currentTarget.value as LensModel; setSession((previous) => updated(previous, { lensModel, result: undefined })); }}><option value="pinhole-radtan5">Standard lens · radial/tangential 5</option><option value="fisheye-kb4">Fisheye · four coefficients</option></select></label>
                 </div>
-                <div class="button-row form-submit"><button type="submit" class="button primary" disabled={cameraBusy || Boolean(requestedResolution.error) || Boolean(stream && !requestedResolution.size)}>{cameraBusy ? "Working…" : stream ? "Apply exact mode" : "Connect camera"}</button></div>
-              </form>
+                {stream && <div class="button-row camera-mode-action"><button type="button" class="button secondary" disabled={cameraBusy || Boolean(requestedResolution.error) || !requestedResolution.size} onClick={() => void applyCameraSettings()}>{cameraBusy ? "Applying…" : "Apply resolution"}</button></div>}
+              </div>
               {session.captureSettings && <dl class="settings-summary"><div><dt>Actual stream</dt><dd>{session.captureSettings.width} × {session.captureSettings.height}</dd></div><div><dt>Frame rate</dt><dd>{session.captureSettings.frameRate?.toFixed(1) ?? "Browser default"}</dd></div><div><dt>Resize mode</dt><dd>{session.captureSettings.resizeMode ?? "Unverified"}</dd></div></dl>}
               {capabilities?.zoom && <label class="field"><span>Optical/digital zoom: {session.captureSettings?.zoom?.toFixed(1) ?? capabilities.zoom.min.toFixed(1)}×</span><input type="range" min={capabilities.zoom.min} max={capabilities.zoom.max} step={capabilities.zoom.step || 0.1} value={session.captureSettings?.zoom ?? capabilities.zoom.min} disabled={cameraBusy} onChange={(event) => void applyZoom(Number(event.currentTarget.value))} /></label>}
               {capabilities?.focusMode && <label class="field"><span>Focus mode</span><select value={session.captureSettings?.focusMode} disabled={cameraBusy} onChange={(event) => void applyFocusMode(event.currentTarget.value)}>{capabilities.focusMode.map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select></label>}
             </section>
 
-            <PatternEditor pattern={session.pattern} onChange={setPattern} />
-
-            <section class="panel setup-actions">
-              <div><h2>Calibration board</h2></div>
-              {patternErrors.map((message) => <Status key={message} tone="error">{message}</Status>)}
-              <div class="button-row"><button type="button" class="button secondary" disabled={workerStatus !== "ready" || patternErrors.length > 0} onClick={() => void downloadPattern()}>Download board SVG</button><button type="button" class="button primary" disabled={workerStatus !== "ready" || patternErrors.length > 0} onClick={() => setStep("capture")}>Start capture</button></div>
-            </section>
+            <PatternEditor pattern={session.pattern} onChange={setPattern} errors={patternErrors} workerReady={workerStatus === "ready"} onDownload={() => void downloadPattern()} onStart={() => setStep("capture")} />
           </div>
         )}
 

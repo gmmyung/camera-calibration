@@ -24,7 +24,7 @@ jobs:
             .cache/opencv-wasm/opencv-4.13.0.tar.gz
             .cache/opencv-wasm/opencv-4.13.0
             .cache/opencv-wasm/build-4.13.0
-          key: opencv-wasm-${{ runner.os }}-4.13.0-emsdk-4.0.15-${{ hashFiles('scripts/build-wasm.sh') }}
+          key: opencv-wasm-${{ runner.os }}-4.13.0-emsdk-4.0.15-${{ hashFiles('scripts/build-wasm.sh', 'patches/opencv-fisheye-view-index.patch') }}
       - name: Build OpenCV WebAssembly module
         run: >-
           docker run --rm -v "$PWD:/workspace" -w /workspace

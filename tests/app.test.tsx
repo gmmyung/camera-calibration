@@ -49,12 +49,14 @@ describe("application shell", () => {
       const button = screen.getByRole("button", { name: "Download board SVG" });
       expect((button as HTMLButtonElement).disabled).toBe(false);
     });
-    expect(screen.getByLabelText("Squares across").getAttribute("max")).toBe("30");
+    expect(screen.getByRole("heading", { name: "Calibration board" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Target" })).toBeNull();
+    expect(screen.getByLabelText("Columns (squares)").getAttribute("max")).toBe("30");
     expect((screen.getByLabelText("Width") as HTMLInputElement).value).toBe("");
     expect((screen.getByLabelText("Height") as HTMLInputElement).value).toBe("");
-    expect(screen.getByRole("button", { name: "Connect camera" }).getAttribute("type")).toBe(
-      "submit",
-    );
+    const connectButton = screen.getByRole("button", { name: "Connect camera" });
+    expect(connectButton.getAttribute("type")).toBe("button");
+    expect(connectButton.closest(".empty-preview")).not.toBeNull();
     expect(screen.queryByText("Print at 100%. Verify the 100 mm ruler.")).toBeNull();
     expect(screen.getByText("OpenCV 4.13.0-test")).toBeTruthy();
   });

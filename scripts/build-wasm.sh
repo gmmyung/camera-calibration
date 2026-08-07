@@ -9,6 +9,7 @@ SOURCE_ROOT="${CACHE_ROOT}/opencv-${OPENCV_VERSION}"
 OPENCV_BUILD="${CACHE_ROOT}/build-${OPENCV_VERSION}"
 MODULE_BUILD="${CACHE_ROOT}/lensbench-${OPENCV_VERSION}"
 OUTPUT_ROOT="${PROJECT_ROOT}/public/wasm"
+FISHEYE_PATCH="${PROJECT_ROOT}/patches/opencv-fisheye-view-index.patch"
 
 if ! command -v emcmake >/dev/null 2>&1; then
   echo "emcmake is required. Run this script in the pinned emscripten/emsdk container." >&2
@@ -26,6 +27,10 @@ if [[ ! -f "${SOURCE_ROOT}/CMakeLists.txt" ]]; then
   fi
   echo "${OPENCV_ARCHIVE_SHA256}  ${archive}" | sha256sum --check --status
   tar -xzf "${archive}" -C "${CACHE_ROOT}"
+fi
+
+if ! grep -q "FISHEYE_VIEW_INDEX" "${SOURCE_ROOT}/modules/calib3d/src/fisheye.cpp"; then
+  patch --directory "${SOURCE_ROOT}" --strip=1 < "${FISHEYE_PATCH}"
 fi
 
 emcmake cmake -S "${SOURCE_ROOT}" -B "${OPENCV_BUILD}" -G"Unix Makefiles" \

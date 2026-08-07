@@ -88,32 +88,50 @@ const illConditionedView = {
     y: intrinsics.cy + (point.y - intrinsics.cy) * 1e-6,
   })),
 };
+const initExtrinsicsFailureView = {
+  id: "init-extrinsics-failure",
+  objectPoints,
+  pointIds,
+  imagePoints: objectPoints.map(() => ({ x: intrinsics.cx, y: intrinsics.cy })),
+};
 const observations = [...validViews];
+observations.splice(3, 0, initExtrinsicsFailureView);
 observations.splice(20, 0, illConditionedView);
 
 const wasmBinary = await readFile(new URL("../public/wasm/calibration.wasm", import.meta.url));
 const module = await createCalibrationModule({ wasmBinary, noInitialRun: true });
 
-function nativeError(operation) {
+function callNative(operation) {
   try {
-    operation();
+    return operation();
   } catch (error) {
     if (typeof error === "number") {
       try {
-        return module.getExceptionMessage(error).at(-1) ?? "";
+        throw new Error(module.getExceptionMessage(error).at(-1) ?? "Native operation failed.");
       } finally {
         module.decrementExceptionRefcount(error);
       }
     }
+    throw error;
+  }
+}
+
+function nativeError(operation) {
+  try {
+    callNative(operation);
+  } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
   assert.fail("Expected the native operation to fail.");
 }
 
-const result = module.solveCalibration(observations, "fisheye-kb4", width, height);
+const result = callNative(() =>
+  module.solveCalibration(observations, "fisheye-kb4", width, height),
+);
 
 assert.equal(result.includedViewIds.length, validViews.length);
-assert.deepEqual(result.excludedViewIds, [illConditionedView.id]);
+assert.deepEqual(result.excludedViewIds, [initExtrinsicsFailureView.id, illConditionedView.id]);
+assert.equal(Object.hasOwn(result.perViewErrors, initExtrinsicsFailureView.id), false);
 assert.equal(Object.hasOwn(result.perViewErrors, illConditionedView.id), false);
 assert.equal(Number.isFinite(result.rmsReprojectionError), true);
 assert.ok(result.rmsReprojectionError < 0.01);
@@ -122,12 +140,26 @@ assert.equal(result.previewCameraMatrix.every(Number.isFinite), true);
 assert.ok(result.previewCameraMatrix[0] > 0);
 assert.ok(result.previewCameraMatrix[4] > 0);
 
-const preview = module.undistortFrame(new Uint8Array(width * height * 4), width, height, {
-  model: "fisheye-kb4",
-  imageSize: { width, height },
-  cameraMatrix: result.cameraMatrix,
-  distortion: result.distortion,
-});
+assert.match(
+  nativeError(() =>
+    module.solveCalibration(
+      [...validViews.slice(0, 11), initExtrinsicsFailureView],
+      "fisheye-kb4",
+      width,
+      height,
+    ),
+  ),
+  /cannot use view "init-extrinsics-failure"/,
+);
+
+const preview = callNative(() =>
+  module.undistortFrame(new Uint8Array(width * height * 4), width, height, {
+    model: "fisheye-kb4",
+    imageSize: { width, height },
+    cameraMatrix: result.cameraMatrix,
+    distortion: result.distortion,
+  }),
+);
 assert.equal(preview.ok, true);
 assert.equal(preview.width, width);
 assert.equal(preview.height, height);

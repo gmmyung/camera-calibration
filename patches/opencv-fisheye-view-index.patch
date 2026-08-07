@@ -1,0 +1,24 @@
+--- a/modules/calib3d/src/fisheye.hpp
++++ b/modules/calib3d/src/fisheye.hpp
+@@ -33 +33 @@
+-void InitExtrinsics(const Mat& _imagePoints, const Mat& _objectPoints, const IntrinsicParams& param, Mat& omckk, Mat& Tckk);
++void InitExtrinsics(const Mat& _imagePoints, const Mat& _objectPoints, const IntrinsicParams& param, Mat& omckk, Mat& Tckk, int image_idx);
+--- a/modules/calib3d/src/fisheye.cpp
++++ b/modules/calib3d/src/fisheye.cpp
+@@ -1428 +1428 @@
+-void cv::internal::InitExtrinsics(const Mat& _imagePoints, const Mat& _objectPoints, const IntrinsicParams& param, Mat& omckk, Mat& Tckk)
++void cv::internal::InitExtrinsics(const Mat& _imagePoints, const Mat& _objectPoints, const IntrinsicParams& param, Mat& omckk, Mat& Tckk, int image_idx)
+@@ -1452 +1452,3 @@
+-    CV_Assert(fabs(norm_u1) > 0);
++    if (!(fabs(norm_u1) > 0))
++        CV_Error(cv::Error::StsAssert,
++                 format("FISHEYE_VIEW_INDEX %d: fabs(norm_u1) > 0", image_idx));
+@@ -1456 +1458,3 @@
+-    CV_Assert(fabs(norm_u2) > 0);
++    if (!(fabs(norm_u2) > 0))
++        CV_Error(cv::Error::StsAssert,
++                 format("FISHEYE_VIEW_INDEX %d: fabs(norm_u2) > 0", image_idx));
+@@ -1494 +1498,2 @@
+-        InitExtrinsics(imT ? image.t() : image, obT ? object.t() : object, param, omckk, Tckk);
++        InitExtrinsics(imT ? image.t() : image, obT ? object.t() : object, param, omckk, Tckk,
++                       image_idx);

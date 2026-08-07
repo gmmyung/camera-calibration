@@ -658,16 +658,21 @@ double median(std::vector<double> values) {
   return (upper + values[middle - 1]) / 2.0;
 }
 
-int ill_conditioned_fisheye_view(const cv::Exception& error) {
-  static const std::string marker =
-      "CALIB_CHECK_COND - Ill-conditioned matrix for input array ";
+int failed_fisheye_view(const cv::Exception& error) {
+  static const std::array<std::string, 2> markers = {
+      "CALIB_CHECK_COND - Ill-conditioned matrix for input array ",
+      "FISHEYE_VIEW_INDEX ",
+  };
   const std::string details = error.err.empty() ? error.what() : error.err;
-  const std::size_t marker_position = details.find(marker);
-  if (marker_position == std::string::npos) return -1;
-  std::istringstream index_stream(details.substr(marker_position + marker.size()));
-  int index = -1;
-  index_stream >> index;
-  return index_stream.fail() ? -1 : index;
+  for (const std::string& marker : markers) {
+    const std::size_t marker_position = details.find(marker);
+    if (marker_position == std::string::npos) continue;
+    std::istringstream index_stream(details.substr(marker_position + marker.size()));
+    int index = -1;
+    index_stream >> index;
+    if (!index_stream.fail()) return index;
+  }
+  return -1;
 }
 
 val solve_calibration(const val& input,
@@ -693,12 +698,12 @@ val solve_calibration(const val& input,
     try {
       state = solve_subset(observations, active, model, cv::Size(width, height));
     } catch (const cv::Exception& error) {
-      const int local_index = model == "fisheye-kb4" ? ill_conditioned_fisheye_view(error) : -1;
+      const int local_index = model == "fisheye-kb4" ? failed_fisheye_view(error) : -1;
       if (local_index < 0 || local_index >= static_cast<int>(active.size())) throw;
       const int observation_index = active[local_index];
       if (active.size() <= 12) {
         throw std::runtime_error(
-            "Fisheye calibration is ill-conditioned for view \"" +
+            "Fisheye calibration cannot use view \"" +
             observations[observation_index].id +
             "\". Deselect that view or capture more tilted views around the image edges.");
       }
