@@ -181,10 +181,7 @@ function PatternEditor({
   return (
     <section class="panel pattern-panel">
       <div class="panel-heading">
-        <div>
-          <p class="eyebrow">Target</p>
-          <h2>Calibration board</h2>
-        </div>
+        <h2>Target</h2>
         <div class="segmented">
           <button
             type="button"
@@ -202,9 +199,6 @@ function PatternEditor({
           </button>
         </div>
       </div>
-      <p class="muted">
-        Use the supplied preset or enter the exact dimensions of an existing board.
-      </p>
       <div class="form-grid">
         {pattern.kind === "charuco" ? (
           <>
@@ -424,7 +418,7 @@ function LiveResultPreview({
   return (
     <section class="panel">
       <div class="panel-heading">
-        <div><p class="eyebrow">Validation</p><h2>Live lens correction</h2></div>
+        <h2>Preview</h2>
         <div class="segmented">
           <button type="button" class={!corrected ? "selected" : ""} onClick={() => setCorrected(false)}>Original</button>
           <button type="button" class={corrected ? "selected" : ""} onClick={() => setCorrected(true)}>Corrected</button>
@@ -436,7 +430,7 @@ function LiveResultPreview({
           <canvas ref={canvasRef} class={!corrected ? "visually-hidden" : ""} />
         </div>
       ) : (
-        <p class="muted">Reconnect the calibrated camera to validate against a live stream.</p>
+        <p class="muted">Connect the calibrated camera to preview correction.</p>
       )}
       {previewError && <Status tone="error">{previewError}</Status>}
     </section>
@@ -896,14 +890,14 @@ export function App() {
   return (
     <div class="app-shell">
       <header class="site-header">
-        <div class="brand"><span class="brand-mark">L</span><div><strong>Lensbench</strong><small>Camera calibration, on-device</small></div></div>
-        <div class="privacy-pill"><span /> Frames stay in this browser</div>
+        <div class="brand"><strong>Lensbench</strong></div>
+        <div class="privacy-pill">Local processing</div>
       </header>
 
       <main>
         <div class="hero-copy">
-          <p class="eyebrow">Intrinsic calibration</p>
-          <h1>{session.step === "setup" ? "Measure the lens, not the guesswork." : patternLabel(session.pattern)}</h1>
+          <h1>Camera calibration</h1>
+          <p>{patternLabel(session.pattern)} · {session.lensModel === "pinhole-radtan5" ? "Standard lens" : "Fisheye"}</p>
         </div>
         <Stepper step={session.step} />
 
@@ -914,9 +908,9 @@ export function App() {
         {session.step === "setup" && (
           <div class="setup-layout">
             <section class="panel camera-panel">
-              <div class="panel-heading"><div><p class="eyebrow">Source</p><h2>Camera and stream</h2></div><span class={stream ? "ready-dot" : "idle-dot"}>{stream ? "Ready" : "Not connected"}</span></div>
+              <div class="panel-heading"><h2>Camera</h2><span class={stream ? "ready-dot" : "idle-dot"}>{stream ? "Ready" : "Not connected"}</span></div>
               <div class="camera-preview compact">
-                {stream ? <video ref={attachPreview} autoplay muted playsinline /> : <div class="empty-preview"><span>◎</span><p>Camera preview appears here</p></div>}
+                {stream ? <video ref={attachPreview} autoplay muted playsinline /> : <div class="empty-preview"><p>No camera connected</p></div>}
               </div>
               <div class="form-grid">
                 <label class="field span-two"><span>Camera</span><select value={selectedDeviceId} onChange={(event) => setSelectedDeviceId(event.currentTarget.value)}><option value="">Default camera</option>{devices.map((device, index) => <option value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>)}</select></label>
@@ -932,10 +926,9 @@ export function App() {
             <PatternEditor pattern={session.pattern} onChange={setPattern} />
 
             <section class="panel setup-actions">
-              <div><p class="eyebrow">Print accurately</p><h2>Prepare the target</h2><p class="muted">Download the exact board, print at 100% or “Actual size,” then verify the 100 mm ruler before capturing.</p></div>
+              <div><h2>Target file</h2><p class="muted">Print at 100%. Verify the 100 mm ruler.</p></div>
               {patternErrors.map((message) => <Status tone="error">{message}</Status>)}
               <div class="button-row"><button type="button" class="button secondary" disabled={workerStatus !== "ready" || patternErrors.length > 0} onClick={() => void downloadPattern()}>Download board SVG</button><button type="button" class="button primary" disabled={workerStatus !== "ready" || patternErrors.length > 0} onClick={() => setStep("capture")}>Start capture</button></div>
-              {!stream && <p class="fine-print">You can continue without a camera and import an existing image set.</p>}
             </section>
           </div>
         )}
@@ -943,34 +936,34 @@ export function App() {
         {session.step === "capture" && (
           <div class="capture-layout">
             <section class="panel capture-main">
-              <div class="panel-heading"><div><p class="eyebrow">Live detector</p><h2>Fill the frame from varied angles</h2></div><label class="switch"><input type="checkbox" checked={autoCapture} onChange={(event) => setAutoCapture(event.currentTarget.checked)} /><span /> Auto capture</label></div>
+              <div class="panel-heading"><h2>Capture</h2><label class="switch"><input type="checkbox" checked={autoCapture} onChange={(event) => setAutoCapture(event.currentTarget.checked)} /><span /> Auto capture</label></div>
               {stream ? <div class="camera-preview live"><video ref={captureVideoRef} autoplay muted playsinline /><canvas ref={overlayRef} /><div class="view-counter">{progress.accepted}<small>/ 20 views</small></div></div> : <div class="empty-capture"><span>Camera is not connected.</span><button type="button" class="button secondary" onClick={() => setStep("setup")}>Configure camera</button></div>}
               <div class="capture-message"><span class={currentDetection?.quality.basicValid ? "signal good" : "signal"} /> <strong>{captureDecision?.reasons[0] ?? "Show the entire board to the camera."}</strong></div>
               <div class="button-row"><button type="button" class="button secondary" disabled={!currentDetection?.quality.basicValid || !stream || progress.accepted >= 30} onClick={() => void captureCurrentFrame()}>Capture now</button><label class="button secondary file-button">Import images<input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => void chooseImportFiles(Array.from(event.currentTarget.files ?? []))} /></label><button type="button" class="button secondary" onClick={() => setStep("setup")}>Camera settings</button><button type="button" class="button primary" disabled={!progress.minimumReached} onClick={() => setStep("review")}>Review {progress.accepted} views</button></div>
               {importGroups.length > 0 && <div class="import-groups"><h3>Choose one resolution</h3>{importGroups.map((group) => <button type="button" disabled={importBusy} onClick={() => void processImportGroup(group)}><strong>{group.width} × {group.height}</strong><span>{group.files.length} images</span></button>)}</div>}
             </section>
-            <aside class="panel capture-guide"><p class="eyebrow">Coverage</p><CoverageGrid observations={session.observations} /><dl class="progress-list"><div><dt>Accepted views</dt><dd>{progress.accepted} / 20</dd></div><div><dt>Coverage cells</dt><dd>{progress.occupiedCells} / 6</dd></div><div><dt>Tilted views</dt><dd>{progress.tiltedViews} / 4</dd></div><div><dt>Near/far ratio</dt><dd>{progress.scaleRatio.toFixed(1)}× / 1.8×</dd></div></dl><div class="tips"><h3>For a strong result</h3><p>Visit the corners and edges, change distance, and tilt the board both horizontally and vertically.</p></div>{progress.targetReached && <Status tone="success">The capture set has strong geometric coverage.</Status>}</aside>
+            <aside class="panel capture-guide"><h2>Coverage</h2><CoverageGrid observations={session.observations} /><dl class="progress-list"><div><dt>Views</dt><dd>{progress.accepted} / 20</dd></div><div><dt>Cells</dt><dd>{progress.occupiedCells} / 6</dd></div><div><dt>Tilted</dt><dd>{progress.tiltedViews} / 4</dd></div><div><dt>Scale</dt><dd>{progress.scaleRatio.toFixed(1)}× / 1.8×</dd></div></dl><p class="capture-hint">Cover edges and corners. Vary distance and tilt.</p>{progress.targetReached && <Status tone="success">Coverage target reached.</Status>}</aside>
           </div>
         )}
 
         {session.step === "review" && (
           <div class="review-layout">
-            <section class="panel review-summary"><div><p class="eyebrow">Dataset</p><h2>{progress.accepted} included views</h2><p class="muted">Remove blurred or repetitive views. OpenCV will perform another robust outlier pass during calibration.</p></div><CoverageGrid observations={session.observations} /><div class="button-row"><button type="button" class="button secondary" onClick={() => setStep("capture")}>Add more views</button><button type="button" class="button primary" disabled={!progress.minimumReached || solving} onClick={() => void solveCalibration()}>{solving ? "Solving…" : "Run calibration"}</button></div></section>
+            <section class="panel review-summary"><div><h2>Views ({progress.accepted} included)</h2><p class="muted">Toggle views before calibration.</p></div><CoverageGrid observations={session.observations} /><div class="button-row"><button type="button" class="button secondary" onClick={() => setStep("capture")}>Add views</button><button type="button" class="button primary" disabled={!progress.minimumReached || solving} onClick={() => void solveCalibration()}>{solving ? "Solving…" : "Run calibration"}</button></div></section>
             <section class="observation-grid" aria-label="Captured calibration views">{session.observations.map((observation, index) => <article class={`observation-card ${observation.included ? "" : "excluded"}`}><div class="observation-image"><ObservationThumbnail observation={observation} /><span>#{index + 1}</span></div><div class="observation-details"><strong>{observation.sourceName ?? `${observation.source} capture`}</strong><small>{observation.quality.detectedCorners} corners · sharpness {observation.quality.sharpness.toFixed(0)}</small>{observation.perViewRms !== undefined && <small>RMS {observation.perViewRms.toFixed(3)} px</small>}<label class="check"><input type="checkbox" checked={observation.included} onChange={(event) => setSession((previous) => updated(previous, { observations: previous.observations.map((candidate) => candidate.id === observation.id ? { ...candidate, included: event.currentTarget.checked, autoExcludedReason: undefined } : candidate), result: undefined }))} /> Include view</label></div></article>)}</section>
           </div>
         )}
 
         {session.step === "results" && session.result && (
           <div class="results-layout">
-            <section class="panel result-summary"><p class="eyebrow">Calibration complete</p><div class="result-title"><div><h2>{session.result.model === "pinhole-radtan5" ? "Standard lens model" : "Fisheye lens model"}</h2><p class="muted">{session.result.imageSize.width} × {session.result.imageSize.height} · OpenCV {session.result.generator.opencvVersion}</p></div><div class={`score ${session.result.rmsReprojectionError <= (session.result.model === "pinhole-radtan5" ? 0.5 : 0.8) ? "good" : "warn"}`}><strong>{session.result.rmsReprojectionError.toFixed(3)}</strong><span>px RMS</span></div></div><ResultMatrix result={session.result} /><div class="button-row"><button type="button" class="button secondary" onClick={() => downloadText("camera-calibration.json", resultJson(session.result!), "application/json")}>Export JSON</button><button type="button" class="button secondary" onClick={() => downloadText("camera-calibration.yaml", toOpenCvYaml(session.result!), "application/yaml")}>Export OpenCV YAML</button><button type="button" class="button primary" onClick={() => setStep("review")}>Review views</button></div>{session.result.excludedViewIds.length > 0 && <Status>{session.result.excludedViewIds.length} high-error view(s) were excluded from the final solve.</Status>}</section>
+            <section class="panel result-summary"><div class="result-title"><div><h2>{session.result.model === "pinhole-radtan5" ? "Standard lens" : "Fisheye"}</h2><p class="muted">{session.result.imageSize.width} × {session.result.imageSize.height} · OpenCV {session.result.generator.opencvVersion}</p></div><div class={`score ${session.result.rmsReprojectionError <= (session.result.model === "pinhole-radtan5" ? 0.5 : 0.8) ? "good" : "warn"}`}><strong>{session.result.rmsReprojectionError.toFixed(3)}</strong><span>px RMS</span></div></div><ResultMatrix result={session.result} /><div class="button-row"><button type="button" class="button secondary" onClick={() => downloadText("camera-calibration.json", resultJson(session.result!), "application/json")}>Export JSON</button><button type="button" class="button secondary" onClick={() => downloadText("camera-calibration.yaml", toOpenCvYaml(session.result!), "application/yaml")}>Export YAML</button><button type="button" class="button primary" onClick={() => setStep("review")}>Review views</button></div>{session.result.excludedViewIds.length > 0 && <Status>{session.result.excludedViewIds.length} high-error view(s) excluded.</Status>}</section>
             <LiveResultPreview stream={stream} result={session.result} worker={worker} />
           </div>
         )}
       </main>
 
-      <footer><span>All processing is local to this tab.</span><button type="button" onClick={() => void resetEverything()}>Delete local data and start over</button><span>{opencvVersion ? `OpenCV ${opencvVersion}` : "OpenCV unavailable"}</span></footer>
+      <footer><button type="button" onClick={() => void resetEverything()}>Delete local data</button><span>{opencvVersion ? `OpenCV ${opencvVersion}` : "OpenCV unavailable"}</span></footer>
 
-      {restoreCandidate && !restoreResolved && <div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="restore-title"><p class="eyebrow">Local recovery</p><h2 id="restore-title">Continue your previous calibration?</h2><p>{restoreCandidate.observations.length} captured views were saved in this browser on {new Date(restoreCandidate.updatedAt).toLocaleString()}.</p><div class="button-row"><button type="button" class="button secondary" onClick={() => { void clearLocalSession(); setRestoreCandidate(undefined); setRestoreResolved(true); }}>Discard it</button><button type="button" class="button primary" onClick={() => { setSession(restoreCandidate); setRestoreCandidate(undefined); setRestoreResolved(true); }}>Restore session</button></div></div></div>}
+      {restoreCandidate && !restoreResolved && <div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="restore-title"><h2 id="restore-title">Restore session?</h2><p>{restoreCandidate.observations.length} views saved {new Date(restoreCandidate.updatedAt).toLocaleString()}.</p><div class="button-row"><button type="button" class="button secondary" onClick={() => { void clearLocalSession(); setRestoreCandidate(undefined); setRestoreResolved(true); }}>Discard</button><button type="button" class="button primary" onClick={() => { setSession(restoreCandidate); setRestoreCandidate(undefined); setRestoreResolved(true); }}>Restore</button></div></div></div>}
     </div>
   );
 }
