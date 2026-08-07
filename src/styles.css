@@ -156,6 +156,7 @@ main { flex: 1; padding: 28px 0 48px; }
 .button.primary:hover:not(:disabled) { background: #3a68a4; }
 .button.secondary { background: #202429; }
 .file-button input { display: none; }
+.file-button.disabled { opacity: .4; cursor: not-allowed; }
 
 .camera-preview, .result-preview {
   position: relative;
@@ -261,6 +262,7 @@ main { flex: 1; padding: 28px 0 48px; }
   cursor: pointer;
 }
 .import-groups span { color: var(--muted); }
+.import-groups button:disabled { opacity: .4; cursor: not-allowed; }
 
 .review-layout { display: grid; gap: 12px; }
 .review-summary { display: grid; grid-template-columns: 1fr 130px auto; align-items: center; gap: 24px; }

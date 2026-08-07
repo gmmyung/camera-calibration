@@ -1,9 +1,11 @@
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <iomanip>
 #include <limits>
 #include <map>
 #include <numeric>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -25,6 +27,12 @@ namespace {
 using emscripten::val;
 
 constexpr double kPi = 3.14159265358979323846;
+constexpr std::uint64_t kMaxSourcePixels = 40'000'000;
+constexpr std::uint64_t kMaxProcessingPixels = 20'000'000;
+constexpr int kMaxPatternGridSize = 30;
+constexpr double kMaxPatternLengthMm = 10'000.0;
+constexpr int kMaxObservations = 100;
+constexpr int kMaxPointsPerObservation = 1'000;
 
 struct Observation {
   std::string id;
@@ -42,6 +50,7 @@ struct SolveState {
 };
 
 cv::aruco::PredefinedDictionaryType dictionary_type(const std::string& name) {
+  if (name.size() > 64) throw std::runtime_error("Invalid ArUco dictionary name.");
   static const std::map<std::string, cv::aruco::PredefinedDictionaryType> dictionaries = {
       {"DICT_4X4_50", cv::aruco::DICT_4X4_50},
       {"DICT_4X4_100", cv::aruco::DICT_4X4_100},
@@ -96,9 +105,72 @@ val point3_array(const std::vector<cv::Point3f>& points) {
   return result;
 }
 
-std::vector<unsigned char> copy_bytes(const val& typed_array) {
-  const std::size_t length = typed_array["byteLength"].as<std::size_t>();
-  std::vector<unsigned char> bytes(length);
+std::uint64_t checked_pixel_count(int width,
+                                  int height,
+                                  std::uint64_t maximum,
+                                  const char* limit_message) {
+  if (width <= 0 || height <= 0) throw std::runtime_error("Invalid image dimensions.");
+  const std::uint64_t pixels = static_cast<std::uint64_t>(width) *
+                               static_cast<std::uint64_t>(height);
+  if (pixels > maximum) throw std::runtime_error(limit_message);
+  return pixels;
+}
+
+std::size_t checked_image_byte_count(int width, int height) {
+  const std::uint64_t pixels = checked_pixel_count(
+      width, height, kMaxProcessingPixels,
+      "The image exceeds the 20-megapixel native processing limit.");
+  return static_cast<std::size_t>(pixels * 4U);
+}
+
+int bounded_array_length(const val& array, int maximum, const std::string& label) {
+  const double length = array["length"].as<double>();
+  if (!std::isfinite(length) || length < 0.0 || length > maximum ||
+      std::floor(length) != length) {
+    throw std::runtime_error(label + " has an invalid length.");
+  }
+  return static_cast<int>(length);
+}
+
+int pattern_dimension(const val& pattern, const char* key) {
+  const double value = pattern[key].as<double>();
+  if (!std::isfinite(value) || std::floor(value) != value || value < 3.0 ||
+      value > kMaxPatternGridSize) {
+    throw std::runtime_error(std::string(key) +
+                             " must be a whole number between 3 and 30.");
+  }
+  return static_cast<int>(value);
+}
+
+double pattern_length(const val& pattern, const char* key) {
+  const double value = pattern[key].as<double>();
+  if (!std::isfinite(value) || value <= 0.0 || value > kMaxPatternLengthMm) {
+    throw std::runtime_error(std::string(key) +
+                             " must be greater than zero and no more than 10000 mm.");
+  }
+  return value;
+}
+
+void validate_charuco_geometry(int squares_x,
+                               int squares_y,
+                               double square_length,
+                               double marker_length,
+                               const cv::aruco::Dictionary& dictionary) {
+  if (marker_length >= square_length) {
+    throw std::runtime_error("Marker length must be smaller than square length.");
+  }
+  const int marker_count = squares_x * squares_y / 2;
+  if (marker_count > dictionary.bytesList.rows) {
+    throw std::runtime_error("The selected ArUco dictionary has too few markers for this board.");
+  }
+}
+
+std::vector<unsigned char> copy_bytes(const val& typed_array, std::size_t expected_length) {
+  const double supplied_length = typed_array["byteLength"].as<double>();
+  if (!std::isfinite(supplied_length) || supplied_length != expected_length) {
+    throw std::runtime_error("The RGBA buffer size does not match the image dimensions.");
+  }
+  std::vector<unsigned char> bytes(expected_length);
   val destination = val(emscripten::typed_memory_view(bytes.size(), bytes.data()));
   destination.call<void>("set", typed_array);
   return bytes;
@@ -149,14 +221,18 @@ double provisional_plane_angle(const std::vector<cv::Point3f>& object_points,
                            height / 2.0, 0.0, 0.0, 1.0);
   cv::Mat rotation_vector;
   cv::Mat translation_vector;
-  if (!cv::solvePnP(object_points, image_points, camera_matrix, cv::noArray(), rotation_vector,
-                    translation_vector, false, cv::SOLVEPNP_ITERATIVE)) {
+  try {
+    if (!cv::solvePnP(object_points, image_points, camera_matrix, cv::noArray(), rotation_vector,
+                      translation_vector, false, cv::SOLVEPNP_ITERATIVE)) {
+      return 0.0;
+    }
+    cv::Mat rotation;
+    cv::Rodrigues(rotation_vector, rotation);
+    const double normal_z = std::clamp(std::abs(rotation.at<double>(2, 2)), 0.0, 1.0);
+    return std::acos(normal_z) * 180.0 / kPi;
+  } catch (const cv::Exception&) {
     return 0.0;
   }
-  cv::Mat rotation;
-  cv::Rodrigues(rotation_vector, rotation);
-  const double normal_z = std::clamp(std::abs(rotation.at<double>(2, 2)), 0.0, 1.0);
-  return std::acos(normal_z) * 180.0 / kPi;
 }
 
 val detection_result(const std::vector<cv::Point2f>& image_points,
@@ -167,7 +243,8 @@ val detection_result(const std::vector<cv::Point2f>& image_points,
                      int available_corners,
                      bool require_all,
                      double sharpness) {
-  const double area_ratio = convex_hull_area(image_points) / static_cast<double>(width * height);
+  const double area_ratio = convex_hull_area(image_points) /
+                            (static_cast<double>(width) * static_cast<double>(height));
   const double edge_distance = minimum_edge_distance(image_points, width, height);
   const int required = require_all
                            ? available_corners
@@ -267,11 +344,7 @@ val failed_detection(int width, int height, const std::string& message) {
 }
 
 val detect_frame(const val& rgba, int width, int height, const val& pattern) {
-  if (width <= 0 || height <= 0) throw std::runtime_error("Invalid image dimensions.");
-  std::vector<unsigned char> bytes = copy_bytes(rgba);
-  if (bytes.size() != static_cast<std::size_t>(width * height * 4)) {
-    throw std::runtime_error("The RGBA buffer size does not match the image dimensions.");
-  }
+  std::vector<unsigned char> bytes = copy_bytes(rgba, checked_image_byte_count(width, height));
   cv::Mat source(height, width, CV_8UC4, bytes.data());
   cv::Mat gray;
   cv::cvtColor(source, gray, cv::COLOR_RGBA2GRAY);
@@ -279,16 +352,18 @@ val detect_frame(const val& rgba, int width, int height, const val& pattern) {
   const std::string kind = pattern["kind"].as<std::string>();
 
   if (kind == "charuco") {
-    const int squares_x = pattern["squaresX"].as<int>();
-    const int squares_y = pattern["squaresY"].as<int>();
-    const float square_length = pattern["squareLengthMm"].as<float>();
-    const float marker_length = pattern["markerLengthMm"].as<float>();
+    const int squares_x = pattern_dimension(pattern, "squaresX");
+    const int squares_y = pattern_dimension(pattern, "squaresY");
+    const double square_length = pattern_length(pattern, "squareLengthMm");
+    const double marker_length = pattern_length(pattern, "markerLengthMm");
     const std::string dictionary_name = pattern["dictionary"].as<std::string>();
     const bool legacy_pattern = pattern["legacyPattern"].as<bool>();
     cv::aruco::Dictionary dictionary =
         cv::aruco::getPredefinedDictionary(dictionary_type(dictionary_name));
-    cv::aruco::CharucoBoard board(cv::Size(squares_x, squares_y), square_length,
-                                  marker_length, dictionary);
+    validate_charuco_geometry(squares_x, squares_y, square_length, marker_length, dictionary);
+    cv::aruco::CharucoBoard board(cv::Size(squares_x, squares_y),
+                                  static_cast<float>(square_length),
+                                  static_cast<float>(marker_length), dictionary);
     board.setLegacyPattern(legacy_pattern);
     cv::aruco::CharucoDetector detector(board);
     std::vector<cv::Point2f> corners;
@@ -309,9 +384,9 @@ val detect_frame(const val& rgba, int width, int height, const val& pattern) {
   }
 
   if (kind == "chessboard") {
-    const int corners_x = pattern["innerCornersX"].as<int>();
-    const int corners_y = pattern["innerCornersY"].as<int>();
-    const float square_length = pattern["squareLengthMm"].as<float>();
+    const int corners_x = pattern_dimension(pattern, "innerCornersX");
+    const int corners_y = pattern_dimension(pattern, "innerCornersY");
+    const float square_length = static_cast<float>(pattern_length(pattern, "squareLengthMm"));
     std::vector<cv::Point2f> corners;
     const bool found = cv::findChessboardCornersSB(
         gray, cv::Size(corners_x, corners_y), corners,
@@ -334,30 +409,65 @@ val detect_frame(const val& rgba, int width, int height, const val& pattern) {
   throw std::runtime_error("Unsupported calibration pattern.");
 }
 
-std::vector<Observation> parse_observations(const val& input) {
-  const int count = input["length"].as<int>();
+float finite_coordinate(const val& value, const std::string& label) {
+  const double coordinate = value.as<double>();
+  if (!std::isfinite(coordinate) || std::abs(coordinate) > 10'000'000.0) {
+    throw std::runtime_error(label + " contains an invalid coordinate.");
+  }
+  return static_cast<float>(coordinate);
+}
+
+std::vector<Observation> parse_observations(const val& input, int width, int height) {
+  const int count = bounded_array_length(input, kMaxObservations, "Calibration observations");
   std::vector<Observation> observations;
   observations.reserve(count);
+  std::set<std::string> observation_ids;
   for (int index = 0; index < count; ++index) {
     const val item = input[index];
     Observation observation;
     observation.id = item["id"].as<std::string>();
+    if (observation.id.empty() || observation.id.size() > 1'024 ||
+        !observation_ids.insert(observation.id).second) {
+      throw std::runtime_error("Calibration view identifiers must be non-empty and unique.");
+    }
     const val image_points = item["imagePoints"];
     const val object_points = item["objectPoints"];
-    const int point_count = image_points["length"].as<int>();
-    if (point_count != object_points["length"].as<int>() || point_count < 4) {
+    const val point_ids = item["pointIds"];
+    const int point_count = bounded_array_length(
+        image_points, kMaxPointsPerObservation, "Calibration image points");
+    if (point_count != bounded_array_length(object_points, kMaxPointsPerObservation,
+                                             "Calibration object points") ||
+        point_count != bounded_array_length(point_ids, kMaxPointsPerObservation,
+                                            "Calibration point identifiers") ||
+        point_count < 4) {
       throw std::runtime_error("Each calibration view needs matching image and object points.");
     }
     observation.image_points.reserve(point_count);
     observation.object_points.reserve(point_count);
+    std::set<int> unique_point_ids;
     for (int point_index = 0; point_index < point_count; ++point_index) {
       const val image_point = image_points[point_index];
       const val object_point = object_points[point_index];
-      observation.image_points.emplace_back(image_point["x"].as<float>(),
-                                            image_point["y"].as<float>());
-      observation.object_points.emplace_back(object_point["x"].as<float>(),
-                                             object_point["y"].as<float>(),
-                                             object_point["z"].as<float>());
+      const float image_x = finite_coordinate(image_point["x"], "Image point");
+      const float image_y = finite_coordinate(image_point["y"], "Image point");
+      if (image_x < -width || image_x > width * 2.0F || image_y < -height ||
+          image_y > height * 2.0F) {
+        throw std::runtime_error("A calibration image point is outside the valid range.");
+      }
+      const double point_id_value = point_ids[point_index].as<double>();
+      if (!std::isfinite(point_id_value) || std::floor(point_id_value) != point_id_value ||
+          point_id_value < 0.0 || point_id_value > std::numeric_limits<int>::max()) {
+        throw std::runtime_error("Calibration point identifiers must be non-negative integers.");
+      }
+      const int point_id = static_cast<int>(point_id_value);
+      if (!unique_point_ids.insert(point_id).second) {
+        throw std::runtime_error("Calibration point identifiers must be unique within each view.");
+      }
+      observation.image_points.emplace_back(image_x, image_y);
+      observation.object_points.emplace_back(
+          finite_coordinate(object_point["x"], "Object point"),
+          finite_coordinate(object_point["y"], "Object point"),
+          finite_coordinate(object_point["z"], "Object point"));
     }
     observations.push_back(std::move(observation));
   }
@@ -366,13 +476,18 @@ std::vector<Observation> parse_observations(const val& input) {
 
 double view_error(const std::vector<cv::Point2f>& detected,
                   const std::vector<cv::Point2f>& projected) {
+  if (detected.empty() || detected.size() != projected.size()) {
+    throw std::runtime_error("OpenCV returned an invalid projected point set.");
+  }
   double squared_error = 0.0;
   for (std::size_t index = 0; index < detected.size(); ++index) {
     const double dx = detected[index].x - projected[index].x;
     const double dy = detected[index].y - projected[index].y;
     squared_error += dx * dx + dy * dy;
   }
-  return std::sqrt(squared_error / detected.size());
+  const double error = std::sqrt(squared_error / detected.size());
+  if (!std::isfinite(error)) throw std::runtime_error("OpenCV returned a non-finite view error.");
+  return error;
 }
 
 SolveState solve_subset(const std::vector<Observation>& observations,
@@ -411,6 +526,26 @@ SolveState solve_subset(const std::vector<Observation>& observations,
     throw std::runtime_error("Unsupported lens model.");
   }
 
+  const int expected_distortion = model == "pinhole-radtan5" ? 5 : 4;
+  if (state.camera_matrix.rows != 3 || state.camera_matrix.cols != 3 ||
+      state.camera_matrix.type() != CV_64F ||
+      static_cast<int>(state.distortion.total()) != expected_distortion ||
+      !cv::checkRange(state.camera_matrix) || !cv::checkRange(state.distortion) ||
+      state.camera_matrix.at<double>(0, 0) <= 0.0 ||
+      state.camera_matrix.at<double>(1, 1) <= 0.0 || !std::isfinite(state.rms) ||
+      state.rotation_vectors.size() != active.size() ||
+      state.translation_vectors.size() != active.size()) {
+    throw std::runtime_error("OpenCV returned an invalid calibration solution.");
+  }
+  for (std::size_t index = 0; index < active.size(); ++index) {
+    if (state.rotation_vectors[index].total() != 3 ||
+        state.translation_vectors[index].total() != 3 ||
+        !cv::checkRange(state.rotation_vectors[index]) ||
+        !cv::checkRange(state.translation_vectors[index])) {
+      throw std::runtime_error("OpenCV returned invalid calibration poses.");
+    }
+  }
+
   state.errors.reserve(active.size());
   double total_squared_error = 0.0;
   std::size_t total_points = 0;
@@ -431,7 +566,11 @@ SolveState solve_subset(const std::vector<Observation>& observations,
     total_squared_error += error * error * image_points[local_index].size();
     total_points += image_points[local_index].size();
   }
+  if (total_points == 0) throw std::runtime_error("Calibration views contain no points.");
   state.rms = std::sqrt(total_squared_error / total_points);
+  if (!std::isfinite(state.rms)) {
+    throw std::runtime_error("OpenCV returned a non-finite reprojection error.");
+  }
   return state;
 }
 
@@ -461,7 +600,12 @@ val solve_calibration(const val& input,
                       const std::string& model,
                       int width,
                       int height) {
-  std::vector<Observation> observations = parse_observations(input);
+  checked_pixel_count(width, height, kMaxSourcePixels,
+                      "The calibration image exceeds the 40-megapixel limit.");
+  if (model != "pinhole-radtan5" && model != "fisheye-kb4") {
+    throw std::runtime_error("Unsupported lens model.");
+  }
+  std::vector<Observation> observations = parse_observations(input, width, height);
   if (observations.size() < 12) throw std::runtime_error("At least 12 valid views are required.");
   std::vector<int> active(observations.size());
   std::iota(active.begin(), active.end(), 0);
@@ -497,7 +641,9 @@ val solve_calibration(const val& input,
     std::vector<double> deviations;
     deviations.reserve(state.errors.size());
     for (const double error : state.errors) deviations.push_back(std::abs(error - center));
-    const double threshold = std::max(absolute_threshold, center + 3.0 * median(deviations));
+    constexpr double kNormalConsistencyFactor = 1.4826;
+    const double threshold = std::max(
+        absolute_threshold, center + 3.0 * kNormalConsistencyFactor * median(deviations));
     const auto worst = std::max_element(state.errors.begin(), state.errors.end());
     if (worst == state.errors.end() || *worst <= threshold) break;
     const std::size_t local_index = std::distance(state.errors.begin(), worst);
@@ -547,24 +693,47 @@ val solve_calibration(const val& input,
 
 cv::Mat camera_matrix_from_result(const val& calibration, int width, int height) {
   const val source = calibration["cameraMatrix"];
-  if (source["length"].as<int>() != 9) throw std::runtime_error("Invalid camera matrix.");
+  if (bounded_array_length(source, 9, "Camera matrix") != 9) {
+    throw std::runtime_error("Invalid camera matrix.");
+  }
   cv::Mat matrix(3, 3, CV_64F);
-  for (int index = 0; index < 9; ++index) matrix.at<double>(index / 3, index % 3) = source[index].as<double>();
+  for (int index = 0; index < 9; ++index) {
+    const double value = source[index].as<double>();
+    if (!std::isfinite(value)) throw std::runtime_error("Invalid camera matrix.");
+    matrix.at<double>(index / 3, index % 3) = value;
+  }
+  if (matrix.at<double>(0, 0) <= 0.0 || matrix.at<double>(1, 1) <= 0.0) {
+    throw std::runtime_error("Invalid camera focal lengths.");
+  }
   const val calibrated_size = calibration["imageSize"];
-  const double scale_x = width / calibrated_size["width"].as<double>();
-  const double scale_y = height / calibrated_size["height"].as<double>();
+  const double calibrated_width = calibrated_size["width"].as<double>();
+  const double calibrated_height = calibrated_size["height"].as<double>();
+  if (!std::isfinite(calibrated_width) || !std::isfinite(calibrated_height) ||
+      calibrated_width <= 0.0 || calibrated_height <= 0.0) {
+    throw std::runtime_error("Invalid calibrated image dimensions.");
+  }
+  const double scale_x = width / calibrated_width;
+  const double scale_y = height / calibrated_height;
   matrix.at<double>(0, 0) *= scale_x;
+  matrix.at<double>(0, 1) *= scale_x;
   matrix.at<double>(0, 2) *= scale_x;
   matrix.at<double>(1, 1) *= scale_y;
   matrix.at<double>(1, 2) *= scale_y;
   return matrix;
 }
 
-cv::Mat distortion_from_result(const val& calibration) {
+cv::Mat distortion_from_result(const val& calibration, int expected_length) {
   const val source = calibration["distortion"];
-  const int length = source["length"].as<int>();
-  cv::Mat distortion(length, 1, CV_64F);
-  for (int index = 0; index < length; ++index) distortion.at<double>(index) = source[index].as<double>();
+  if (bounded_array_length(source, expected_length, "Distortion coefficients") !=
+      expected_length) {
+    throw std::runtime_error("The distortion coefficient count does not match the lens model.");
+  }
+  cv::Mat distortion(expected_length, 1, CV_64F);
+  for (int index = 0; index < expected_length; ++index) {
+    const double value = source[index].as<double>();
+    if (!std::isfinite(value)) throw std::runtime_error("Invalid distortion coefficients.");
+    distortion.at<double>(index) = value;
+  }
   return distortion;
 }
 
@@ -572,22 +741,23 @@ val undistort_frame(const val& rgba,
                     int width,
                     int height,
                     const val& calibration) {
-  std::vector<unsigned char> bytes = copy_bytes(rgba);
-  if (bytes.size() != static_cast<std::size_t>(width * height * 4)) {
-    throw std::runtime_error("The RGBA buffer size does not match the image dimensions.");
-  }
+  std::vector<unsigned char> bytes = copy_bytes(rgba, checked_image_byte_count(width, height));
   cv::Mat source(height, width, CV_8UC4, bytes.data());
   cv::Mat output;
-  cv::Mat camera_matrix = camera_matrix_from_result(calibration, width, height);
-  cv::Mat distortion = distortion_from_result(calibration);
   const std::string model = calibration["model"].as<std::string>();
+  const int expected_distortion =
+      model == "pinhole-radtan5" ? 5 : model == "fisheye-kb4" ? 4 : 0;
+  if (expected_distortion == 0) throw std::runtime_error("Unsupported lens model.");
+  cv::Mat camera_matrix = camera_matrix_from_result(calibration, width, height);
+  cv::Mat distortion = distortion_from_result(calibration, expected_distortion);
   if (model == "pinhole-radtan5") {
     cv::undistort(source, output, camera_matrix, distortion, camera_matrix);
   } else if (model == "fisheye-kb4") {
     cv::fisheye::undistortImage(source, output, camera_matrix, distortion, camera_matrix,
                                 cv::Size(width, height));
-  } else {
-    throw std::runtime_error("Unsupported lens model.");
+  }
+  if (output.rows != height || output.cols != width || output.type() != CV_8UC4) {
+    throw std::runtime_error("OpenCV returned an invalid undistorted image.");
   }
   if (!output.isContinuous()) output = output.clone();
   val result = val::object();
@@ -596,21 +766,6 @@ val undistort_frame(const val& rgba,
   result.set("height", height);
   result.set("rgba", copied_uint8_array(output.data, output.total() * output.elemSize()));
   return result;
-}
-
-std::string xml_escape(const std::string& input) {
-  std::string escaped;
-  escaped.reserve(input.size());
-  for (const char character : input) {
-    switch (character) {
-      case '&': escaped += "&amp;"; break;
-      case '<': escaped += "&lt;"; break;
-      case '>': escaped += "&gt;"; break;
-      case '"': escaped += "&quot;"; break;
-      default: escaped += character;
-    }
-  }
-  return escaped;
 }
 
 std::vector<cv::Rect> merged_black_rectangles(const cv::Mat& binary) {
@@ -639,7 +794,7 @@ std::vector<cv::Rect> merged_black_rectangles(const cv::Mat& binary) {
     }
     active = std::move(next);
   }
-  for (const auto& [key, rectangle] : active) completed.push_back(rectangle);
+  for (const auto& entry : active) completed.push_back(entry.second);
   return completed;
 }
 
@@ -651,9 +806,9 @@ std::string generate_pattern_svg(const val& pattern) {
   board_elements << std::fixed << std::setprecision(5);
 
   if (kind == "chessboard") {
-    const int inner_x = pattern["innerCornersX"].as<int>();
-    const int inner_y = pattern["innerCornersY"].as<int>();
-    const double square = pattern["squareLengthMm"].as<double>();
+    const int inner_x = pattern_dimension(pattern, "innerCornersX");
+    const int inner_y = pattern_dimension(pattern, "innerCornersY");
+    const double square = pattern_length(pattern, "squareLengthMm");
     const int squares_x = inner_x + 1;
     const int squares_y = inner_y + 1;
     board_width_mm = squares_x * square;
@@ -668,17 +823,20 @@ std::string generate_pattern_svg(const val& pattern) {
       }
     }
   } else if (kind == "charuco") {
-    const int squares_x = pattern["squaresX"].as<int>();
-    const int squares_y = pattern["squaresY"].as<int>();
-    const float square = pattern["squareLengthMm"].as<float>();
-    const float marker = pattern["markerLengthMm"].as<float>();
+    const int squares_x = pattern_dimension(pattern, "squaresX");
+    const int squares_y = pattern_dimension(pattern, "squaresY");
+    const double square = pattern_length(pattern, "squareLengthMm");
+    const double marker = pattern_length(pattern, "markerLengthMm");
     const bool legacy = pattern["legacyPattern"].as<bool>();
     const std::string dictionary_name = pattern["dictionary"].as<std::string>();
     board_width_mm = squares_x * square;
     board_height_mm = squares_y * square;
     cv::aruco::Dictionary dictionary =
         cv::aruco::getPredefinedDictionary(dictionary_type(dictionary_name));
-    cv::aruco::CharucoBoard board(cv::Size(squares_x, squares_y), square, marker, dictionary);
+    validate_charuco_geometry(squares_x, squares_y, square, marker, dictionary);
+    cv::aruco::CharucoBoard board(cv::Size(squares_x, squares_y),
+                                  static_cast<float>(square),
+                                  static_cast<float>(marker), dictionary);
     board.setLegacyPattern(legacy);
     cv::Mat image;
     constexpr int pixels_per_square = 80;

@@ -3,9 +3,11 @@ import { CHARUCO_PRESET } from "../src/domain/patterns";
 import type { CalibrationSessionV1 } from "../src/domain/types";
 import {
   clearLocalSession,
+  deleteSessionBlobs,
   getSessionBlob,
   loadActiveSession,
   putSessionBlob,
+  putSessionBlobs,
   saveActiveSession,
 } from "../src/lib/session-db";
 
@@ -37,6 +39,19 @@ describe("local session recovery", () => {
     // fake-indexeddb does not retain jsdom's Blob prototype across its structured clone,
     // but a defined value verifies that the separate blob store/key path is used.
     expect(restored).toBeDefined();
+  });
+
+  it("stores and deletes related blobs in one transaction", async () => {
+    await putSessionBlobs([
+      ["image", new Blob(["full frame"])],
+      ["thumbnail", new Blob(["small frame"])],
+    ]);
+    expect(await getSessionBlob("image")).toBeDefined();
+    expect(await getSessionBlob("thumbnail")).toBeDefined();
+
+    await deleteSessionBlobs(["image", "thumbnail"]);
+    expect(await getSessionBlob("image")).toBeUndefined();
+    expect(await getSessionBlob("thumbnail")).toBeUndefined();
   });
 
   it("clears all local data", async () => {

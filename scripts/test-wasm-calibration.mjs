@@ -17,6 +17,7 @@ for (let row = 0; row < 6; row += 1) {
     });
   }
 }
+const pointIds = objectPoints.map((_, index) => index);
 
 function rotationMatrix(x, y, z) {
   const sx = Math.sin(x);
@@ -72,6 +73,7 @@ const validViews = Array.from({ length: 22 }, (_, index) => {
   return {
     id: `valid-${index}`,
     objectPoints,
+    pointIds,
     imagePoints: objectPoints.map((point) => project(point, rotation, translation)),
   };
 });
@@ -80,6 +82,7 @@ const compressedSource = validViews[4].imagePoints;
 const illConditionedView = {
   id: "ill-conditioned",
   objectPoints,
+  pointIds,
   imagePoints: compressedSource.map((point) => ({
     x: intrinsics.cx + (point.x - intrinsics.cx) * 1e-6,
     y: intrinsics.cy + (point.y - intrinsics.cy) * 1e-6,
@@ -90,6 +93,23 @@ observations.splice(20, 0, illConditionedView);
 
 const wasmBinary = await readFile(new URL("../public/wasm/calibration.wasm", import.meta.url));
 const module = await createCalibrationModule({ wasmBinary, noInitialRun: true });
+
+function nativeError(operation) {
+  try {
+    operation();
+  } catch (error) {
+    if (typeof error === "number") {
+      try {
+        return module.getExceptionMessage(error).at(-1) ?? "";
+      } finally {
+        module.decrementExceptionRefcount(error);
+      }
+    }
+    return error instanceof Error ? error.message : String(error);
+  }
+  assert.fail("Expected the native operation to fail.");
+}
+
 const result = module.solveCalibration(observations, "fisheye-kb4", width, height);
 
 assert.equal(result.includedViewIds.length, validViews.length);
@@ -98,4 +118,36 @@ assert.equal(Object.hasOwn(result.perViewErrors, illConditionedView.id), false);
 assert.equal(Number.isFinite(result.rmsReprojectionError), true);
 assert.ok(result.rmsReprojectionError < 0.01);
 
-console.log("Fisheye calibration recovered from an ill-conditioned view.");
+const duplicateIds = validViews.slice(0, 12).map((view) => ({ ...view, id: "duplicate" }));
+assert.match(
+  nativeError(() => module.solveCalibration(duplicateIds, "pinhole-radtan5", width, height)),
+  /identifiers must be non-empty and unique/,
+);
+assert.match(
+  nativeError(() => module.solveCalibration(validViews.slice(0, 12), "pinhole-radtan5", 0, height)),
+  /Invalid image dimensions/,
+);
+assert.match(
+  nativeError(() =>
+    module.generatePatternSvg({
+      kind: "chessboard",
+      innerCornersX: 3.5,
+      innerCornersY: 6,
+      squareLengthMm: 24,
+    }),
+  ),
+  /whole number between 3 and 30/,
+);
+assert.match(
+  nativeError(() =>
+    module.detectFrame(new Uint8Array(4), 10_000, 10_000, {
+      kind: "chessboard",
+      innerCornersX: 9,
+      innerCornersY: 6,
+      squareLengthMm: 24,
+    }),
+  ),
+  /20-megapixel native processing limit/,
+);
+
+console.log("WASM calibration and native input guards passed.");

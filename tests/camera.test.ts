@@ -51,8 +51,8 @@ describe("CameraController", () => {
     const controller = new CameraController();
     await controller.open({ width: 1920, height: 1080, deviceId: "camera-1" });
 
-    const exact = getUserMedia.mock.calls[0][0].video;
-    const fallback = getUserMedia.mock.calls[1][0].video;
+    const exact = getUserMedia.mock.calls[0]![0].video;
+    const fallback = getUserMedia.mock.calls[1]![0].video;
     expect(exact.width).toEqual({ exact: 1920 });
     expect(exact.height).toEqual({ exact: 1080 });
     expect(exact.resizeMode).toEqual({ ideal: "none" });
@@ -79,8 +79,8 @@ describe("CameraController", () => {
 
     await controller.applyResolution({ width: 3840, height: 2160 });
 
-    expect(track.applyConstraints.mock.calls[0][0].width).toEqual({ exact: 3840 });
-    expect(track.applyConstraints.mock.calls[1][0].width).toEqual({ ideal: 3840 });
+    expect(track.applyConstraints.mock.calls[0]![0].width).toEqual({ exact: 3840 });
+    expect(track.applyConstraints.mock.calls[1]![0].width).toEqual({ ideal: 3840 });
     expect(controller.capabilities()).toBeUndefined();
   });
 
@@ -101,7 +101,7 @@ describe("CameraController", () => {
     await opening;
 
     expect(getUserMedia).toHaveBeenCalledTimes(2);
-    expect(getUserMedia.mock.calls[1][0].video.width).toEqual({ exact: 1280 });
+    expect(getUserMedia.mock.calls[1]![0].video.width).toEqual({ exact: 1280 });
   });
 
   it("stops the previous track before opening another camera", async () => {
@@ -125,5 +125,73 @@ describe("CameraController", () => {
     await vi.runAllTimersAsync();
     await secondOpening;
     expect(getUserMedia).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry after stop cancels a pending recovery", async () => {
+    vi.useFakeTimers();
+    const getUserMedia = vi.fn().mockRejectedValue({
+      name: "NotReadableError",
+      message: "A MediaStreamTrack ended due to a capture failure",
+    });
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: getUserMedia });
+    const controller = new CameraController();
+    const opening = controller.open({ width: 1280, height: 720 });
+    const rejection = expect(opening).rejects.toThrow("cancelled");
+
+    await Promise.resolve();
+    controller.stop();
+    await vi.runAllTimersAsync();
+
+    await rejection;
+    expect(getUserMedia).toHaveBeenCalledOnce();
+  });
+
+  it("stops a stream that arrives after the operation was cancelled", async () => {
+    vi.useFakeTimers();
+    const track = fakeTrack();
+    let resolveStream: ((stream: MediaStream) => void) | undefined;
+    const getUserMedia = vi.fn(
+      () =>
+        new Promise<MediaStream>((resolve) => {
+          resolveStream = resolve;
+        }),
+    );
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: getUserMedia });
+    const controller = new CameraController();
+    const opening = controller.open({ width: 1280, height: 720 });
+    const rejection = expect(opening).rejects.toThrow("cancelled");
+
+    controller.stop();
+    resolveStream?.(fakeStream(track));
+    await vi.runAllTimersAsync();
+
+    await rejection;
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(controller.currentStream()).toBeUndefined();
+  });
+
+  it("ignores a camera adjustment that completes after stop", async () => {
+    vi.useFakeTimers();
+    const track = fakeTrack();
+    const getUserMedia = vi.fn().mockResolvedValue(fakeStream(track));
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: getUserMedia });
+    const controller = new CameraController();
+    const opening = controller.open({ width: 1280, height: 720 });
+    await vi.runAllTimersAsync();
+    await opening;
+
+    let finishAdjustment: (() => void) | undefined;
+    track.applyConstraints.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishAdjustment = resolve;
+        }),
+    );
+    const adjustment = controller.applyZoom(2);
+    const rejection = expect(adjustment).rejects.toThrow("cancelled");
+    controller.stop();
+    finishAdjustment?.();
+
+    await rejection;
   });
 });

@@ -76,6 +76,15 @@ describe("CaptureGate", () => {
     gate.evaluate(detection({ centerX: 0.1 }), [], 1050);
     expect(gate.evaluate(detection({ centerX: 0.1 }), [], 1100).accept).toBe(false);
   });
+
+  it("treats mismatched point arrays and empty image dimensions as unstable", () => {
+    const gate = new CaptureGate();
+    const malformed = detection();
+    malformed.imagePoints = malformed.imagePoints.slice(0, 3);
+    malformed.imageSize = { width: 0, height: 0 };
+    expect(gate.evaluate(malformed, [], 0).basicValid).toBe(false);
+    expect(gate.evaluate(malformed, [], 1_000).stable).toBe(false);
+  });
 });
 
 describe("captureProgress", () => {

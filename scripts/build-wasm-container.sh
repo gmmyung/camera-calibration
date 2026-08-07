@@ -10,4 +10,4 @@ docker run --rm \
   --volume "${PROJECT_ROOT}:/workspace" \
   --workdir /workspace \
   "${IMAGE}" \
-  bash -lc "scripts/build-wasm.sh; chown -R ${HOST_UID}:${HOST_GID} public/wasm .cache/opencv-wasm"
+  bash -lc "scripts/build-wasm.sh && chown -R ${HOST_UID}:${HOST_GID} public/wasm .cache/opencv-wasm"

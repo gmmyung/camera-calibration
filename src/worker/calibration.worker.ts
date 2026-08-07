@@ -11,6 +11,7 @@ import {
 
 const context = self as DedicatedWorkerGlobalScope;
 const MAX_WORKING_EDGE = 1920;
+const MAX_SOURCE_PIXELS = 40_000_000;
 let module: CalibrationWasmModule | undefined;
 
 function requireModule(): CalibrationWasmModule {
@@ -25,27 +26,34 @@ function bitmapPixels(bitmap: ImageBitmap): {
   scaleX: number;
   scaleY: number;
 } {
-  const sourceWidth = bitmap.width;
-  const sourceHeight = bitmap.height;
-  const scale = Math.min(1, MAX_WORKING_EDGE / Math.max(sourceWidth, sourceHeight));
-  const width = Math.max(1, Math.round(sourceWidth * scale));
-  const height = Math.max(1, Math.round(sourceHeight * scale));
-  const canvas = new OffscreenCanvas(width, height);
-  const renderingContext = canvas.getContext("2d", {
-    alpha: false,
-    willReadFrequently: true,
-  });
-  if (!renderingContext) throw new Error("Offscreen 2D canvas is unavailable.");
-  renderingContext.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close();
-  const imageData = renderingContext.getImageData(0, 0, width, height);
-  return {
-    rgba: imageData.data,
-    width,
-    height,
-    scaleX: sourceWidth / width,
-    scaleY: sourceHeight / height,
-  };
+  try {
+    const sourceWidth = bitmap.width;
+    const sourceHeight = bitmap.height;
+    if (sourceWidth <= 0 || sourceHeight <= 0) throw new Error("The source frame is empty.");
+    if (sourceWidth * sourceHeight > MAX_SOURCE_PIXELS) {
+      throw new Error("The source frame exceeds the 40-megapixel limit.");
+    }
+    const scale = Math.min(1, MAX_WORKING_EDGE / Math.max(sourceWidth, sourceHeight));
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+    const canvas = new OffscreenCanvas(width, height);
+    const renderingContext = canvas.getContext("2d", {
+      alpha: false,
+      willReadFrequently: true,
+    });
+    if (!renderingContext) throw new Error("Offscreen 2D canvas is unavailable.");
+    renderingContext.drawImage(bitmap, 0, 0, width, height);
+    const imageData = renderingContext.getImageData(0, 0, width, height);
+    return {
+      rgba: imageData.data,
+      width,
+      height,
+      scaleX: sourceWidth / width,
+      scaleY: sourceHeight / height,
+    };
+  } finally {
+    bitmap.close();
+  }
 }
 
 function sourceScaleDetection(
@@ -136,6 +144,14 @@ context.addEventListener("message", async (event: MessageEvent<WorkerRequest>) =
           request.calibration,
         );
         if (!native.ok) throw new Error(native.error || "OpenCV could not undistort the frame.");
+        if (
+          native.width !== pixels.width ||
+          native.height !== pixels.height ||
+          !(native.rgba instanceof Uint8Array) ||
+          native.rgba.byteLength !== native.width * native.height * 4
+        ) {
+          throw new Error("OpenCV returned an invalid undistorted frame.");
+        }
         response = {
           id: request.id,
           ok: true,
@@ -156,11 +172,6 @@ context.addEventListener("message", async (event: MessageEvent<WorkerRequest>) =
           type: request.type,
           svg: requireModule().generatePatternSvg(request.pattern),
         };
-        break;
-      }
-      case "DISPOSE": {
-        module = undefined;
-        response = { id: request.id, ok: true, type: request.type };
         break;
       }
     }

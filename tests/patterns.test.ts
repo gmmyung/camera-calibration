@@ -25,4 +25,24 @@ describe("pattern definitions", () => {
       }),
     ).toContain("Marker length must be positive and smaller than the square length.");
   });
+
+  it("rejects fractional, non-finite, and oversized dimensions", () => {
+    expect(validatePattern({ ...CHESSBOARD_PRESET, innerCornersX: 3.5 })).not.toEqual([]);
+    expect(validatePattern({ ...CHESSBOARD_PRESET, innerCornersY: Number.NaN })).not.toEqual([]);
+    expect(validatePattern({ ...CHARUCO_PRESET, squaresX: 31 })).not.toEqual([]);
+    expect(validatePattern({ ...CHARUCO_PRESET, squareLengthMm: Number.POSITIVE_INFINITY })).not.toEqual(
+      [],
+    );
+  });
+
+  it("rejects boards with more markers than the dictionary contains", () => {
+    expect(
+      validatePattern({
+        ...CHARUCO_PRESET,
+        squaresX: 11,
+        squaresY: 10,
+        dictionary: "DICT_5X5_50",
+      }),
+    ).toContain("DICT_5X5_50 contains too few markers for this board (55 required).");
+  });
 });

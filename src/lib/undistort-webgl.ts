@@ -114,21 +114,30 @@ export function frameCalibrationUniforms(
   }
   const scaleX = width / result.imageSize.width;
   const scaleY = height / result.imageSize.height;
-  const [fx, matrixSkew, cx, , fy, cy] = result.cameraMatrix;
+  const fx = result.cameraMatrix[0];
+  const matrixSkew = result.cameraMatrix[1];
+  const cx = result.cameraMatrix[2];
+  const fy = result.cameraMatrix[4];
+  const cy = result.cameraMatrix[5];
   if (![fx, matrixSkew, cx, fy, cy, ...result.distortion].every(Number.isFinite)) {
     throw new Error("The calibration contains non-finite values.");
   }
+  if (fx <= 0 || fy <= 0) throw new Error("The calibration has invalid focal lengths.");
   if (result.model === "pinhole-radtan5") {
     if (result.distortion.length !== 5) {
       throw new Error("Standard-lens preview requires five distortion coefficients.");
     }
-    const [k1, k2, p1, p2, k3] = result.distortion;
     return {
       focalLength: [fx * scaleX, fy * scaleY],
       principalPoint: [cx * scaleX, cy * scaleY],
       skew: matrixSkew * scaleX,
-      distortion: [k1, k2, p1, p2],
-      radialK3: k3,
+      distortion: [
+        result.distortion[0]!,
+        result.distortion[1]!,
+        result.distortion[2]!,
+        result.distortion[3]!,
+      ],
+      radialK3: result.distortion[4]!,
       lensModel: 0,
     };
   }
@@ -225,32 +234,40 @@ export class WebGlUndistortRenderer {
   private readonly texture: WebGLTexture;
   private readonly vertexArray: WebGLVertexArrayObject;
   private readonly uniforms: UniformLocations;
+  private textureWidth = 0;
+  private textureHeight = 0;
+  private disposed = false;
 
   private constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly gl: WebGL2RenderingContext,
   ) {
-    this.program = createProgram(gl);
+    const program = createProgram(gl);
     const texture = gl.createTexture();
     const vertexArray = gl.createVertexArray();
-    if (!texture || !vertexArray) {
-      gl.deleteProgram(this.program);
+    try {
+      if (!texture || !vertexArray) {
+        throw new Error("WebGL could not allocate preview resources.");
+      }
+      this.uniforms = {
+        videoTexture: requireUniform(gl, program, "videoTexture"),
+        sourceSize: requireUniform(gl, program, "sourceSize"),
+        focalLength: requireUniform(gl, program, "focalLength"),
+        principalPoint: requireUniform(gl, program, "principalPoint"),
+        skew: requireUniform(gl, program, "skew"),
+        distortion: requireUniform(gl, program, "distortion"),
+        radialK3: requireUniform(gl, program, "radialK3"),
+        lensModel: requireUniform(gl, program, "lensModel"),
+      };
+    } catch (error) {
+      gl.deleteProgram(program);
       if (texture) gl.deleteTexture(texture);
       if (vertexArray) gl.deleteVertexArray(vertexArray);
-      throw new Error("WebGL could not allocate preview resources.");
+      throw error;
     }
+    this.program = program;
     this.texture = texture;
     this.vertexArray = vertexArray;
-    this.uniforms = {
-      videoTexture: requireUniform(gl, this.program, "videoTexture"),
-      sourceSize: requireUniform(gl, this.program, "sourceSize"),
-      focalLength: requireUniform(gl, this.program, "focalLength"),
-      principalPoint: requireUniform(gl, this.program, "principalPoint"),
-      skew: requireUniform(gl, this.program, "skew"),
-      distortion: requireUniform(gl, this.program, "distortion"),
-      radialK3: requireUniform(gl, this.program, "radialK3"),
-      lensModel: requireUniform(gl, this.program, "lensModel"),
-    };
 
     gl.disable(gl.BLEND);
     gl.disable(gl.CULL_FACE);
@@ -281,6 +298,7 @@ export class WebGlUndistortRenderer {
   }
 
   render(video: HTMLVideoElement, result: CalibrationResultV1): void {
+    if (this.disposed) throw new Error("The WebGL preview renderer was disposed.");
     const sourceWidth = video.videoWidth;
     const sourceHeight = video.videoHeight;
     if (!sourceWidth || !sourceHeight) return;
@@ -303,14 +321,20 @@ export class WebGlUndistortRenderer {
     gl.bindVertexArray(this.vertexArray);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
-    gl.texImage2D(
-      gl.TEXTURE_2D,
-      0,
-      gl.RGBA,
-      gl.RGBA,
-      gl.UNSIGNED_BYTE,
-      video,
-    );
+    if (this.textureWidth !== sourceWidth || this.textureHeight !== sourceHeight) {
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        video,
+      );
+      this.textureWidth = sourceWidth;
+      this.textureHeight = sourceHeight;
+    } else {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, video);
+    }
     gl.uniform2f(this.uniforms.sourceSize, sourceWidth, sourceHeight);
     gl.uniform2f(this.uniforms.focalLength, ...calibration.focalLength);
     gl.uniform2f(this.uniforms.principalPoint, ...calibration.principalPoint);
@@ -322,6 +346,8 @@ export class WebGlUndistortRenderer {
   }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.gl.deleteTexture(this.texture);
     this.gl.deleteVertexArray(this.vertexArray);
     this.gl.deleteProgram(this.program);

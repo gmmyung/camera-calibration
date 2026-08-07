@@ -2,4 +2,6 @@ import { render } from "preact";
 import { App } from "./app/App";
 import "./styles.css";
 
-render(<App />, document.getElementById("app")!);
+const root = document.getElementById("app");
+if (!root) throw new Error("The application root element is missing.");
+render(<App />, root);

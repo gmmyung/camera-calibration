@@ -1,13 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
-import type { ComponentChildren, JSX } from "preact";
-import { CaptureGate, captureProgress, type CaptureDecision } from "../domain/capture-quality";
+import type { ComponentChildren } from "preact";
+import {
+  CaptureGate,
+  captureProgress,
+  isUsableDetection,
+  type CaptureDecision,
+} from "../domain/capture-quality";
 import {
   CHARUCO_PRESET,
   CHESSBOARD_PRESET,
+  MAX_PATTERN_GRID_SIZE,
+  MAX_PATTERN_LENGTH_MM,
   clonePattern,
   patternLabel,
   validatePattern,
 } from "../domain/patterns";
+import { parseStoredSession } from "../domain/session";
 import {
   DICTIONARY_NAMES,
   type AppStep,
@@ -37,10 +45,10 @@ import {
 } from "../lib/images";
 import {
   clearLocalSession,
-  deleteSessionBlob,
+  deleteSessionBlobs,
   getSessionBlob,
   loadActiveSession,
-  putSessionBlob,
+  putSessionBlobs,
   saveActiveSession,
   storageHeadroom,
 } from "../lib/session-db";
@@ -49,7 +57,22 @@ import { CalibrationWorkerClient } from "../worker/client";
 
 const MAX_IMPORT_FILES = 100;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
-const MAX_SESSION_BYTES = 250 * 1024 * 1024;
+const MAX_IMPORT_BYTES = 250 * 1024 * 1024;
+
+class SessionOperationCancelledError extends Error {
+  constructor() {
+    super("The session changed before the operation completed.");
+    this.name = "SessionOperationCancelledError";
+  }
+}
+
+function isOperationCancellation(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("name" in error)) return false;
+  return (
+    error.name === "SessionOperationCancelledError" ||
+    error.name === "CameraOperationCancelledError"
+  );
+}
 
 function freshSession(): CalibrationSessionV1 {
   const now = new Date().toISOString();
@@ -141,7 +164,11 @@ function Stepper({ step }: { step: AppStep }) {
   return (
     <ol class="stepper" aria-label="Calibration progress">
       {steps.map((candidate, index) => (
-        <li class={index === activeIndex ? "active" : index < activeIndex ? "complete" : ""}>
+        <li
+          key={candidate.id}
+          class={index === activeIndex ? "active" : index < activeIndex ? "complete" : ""}
+          aria-current={index === activeIndex ? "step" : undefined}
+        >
           <span>{index + 1}</span>
           {candidate.label}
         </li>
@@ -203,6 +230,7 @@ function PatternEditor({
           <button
             type="button"
             class={pattern.kind === "charuco" ? "selected" : ""}
+            aria-pressed={pattern.kind === "charuco"}
             onClick={() => onChange(clonePattern(CHARUCO_PRESET))}
           >
             ChArUco
@@ -210,6 +238,7 @@ function PatternEditor({
           <button
             type="button"
             class={pattern.kind === "chessboard" ? "selected" : ""}
+            aria-pressed={pattern.kind === "chessboard"}
             onClick={() => onChange(clonePattern(CHESSBOARD_PRESET))}
           >
             Chessboard
@@ -223,18 +252,21 @@ function PatternEditor({
               label="Squares across"
               value={pattern.squaresX}
               min={3}
+              max={MAX_PATTERN_GRID_SIZE}
               onChange={(squaresX) => onChange({ ...pattern, squaresX })}
             />
             <NumberField
               label="Squares down"
               value={pattern.squaresY}
               min={3}
+              max={MAX_PATTERN_GRID_SIZE}
               onChange={(squaresY) => onChange({ ...pattern, squaresY })}
             />
             <NumberField
               label="Square length (mm)"
               value={pattern.squareLengthMm}
               min={0.1}
+              max={MAX_PATTERN_LENGTH_MM}
               step={0.1}
               onChange={(squareLengthMm) => onChange({ ...pattern, squareLengthMm })}
             />
@@ -242,6 +274,7 @@ function PatternEditor({
               label="Marker length (mm)"
               value={pattern.markerLengthMm}
               min={0.1}
+              max={MAX_PATTERN_LENGTH_MM}
               step={0.1}
               onChange={(markerLengthMm) => onChange({ ...pattern, markerLengthMm })}
             />
@@ -257,7 +290,7 @@ function PatternEditor({
                 }
               >
                 {DICTIONARY_NAMES.map((dictionary) => (
-                  <option value={dictionary}>{dictionary}</option>
+                  <option key={dictionary} value={dictionary}>{dictionary}</option>
                 ))}
               </select>
             </label>
@@ -278,18 +311,21 @@ function PatternEditor({
               label="Inner corners across"
               value={pattern.innerCornersX}
               min={3}
+              max={MAX_PATTERN_GRID_SIZE}
               onChange={(innerCornersX) => onChange({ ...pattern, innerCornersX })}
             />
             <NumberField
               label="Inner corners down"
               value={pattern.innerCornersY}
               min={3}
+              max={MAX_PATTERN_GRID_SIZE}
               onChange={(innerCornersY) => onChange({ ...pattern, innerCornersY })}
             />
             <NumberField
               label="Square length (mm)"
               value={pattern.squareLengthMm}
               min={0.1}
+              max={MAX_PATTERN_LENGTH_MM}
               step={0.1}
               onChange={(squareLengthMm) => onChange({ ...pattern, squareLengthMm })}
             />
@@ -308,7 +344,7 @@ function CoverageGrid({ observations }: { observations: FrameObservation[] }) {
   return (
     <div class="coverage" aria-label="Image coverage map">
       {counts.map((count, cell) => (
-        <div class={count ? "covered" : ""} title={`Cell ${cell + 1}: ${count} views`}>
+        <div key={cell} class={count ? "covered" : ""} title={`Cell ${cell + 1}: ${count} views`}>
           {count || "·"}
         </div>
       ))}
@@ -333,18 +369,24 @@ function ObservationThumbnail({ observation }: { observation: FrameObservation }
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [observation.thumbnailBlobKey]);
-  return url ? <img src={url} alt="Calibration capture" /> : <div class="image-placeholder" />;
+  return url ? (
+    <img src={url} alt={observation.sourceName ?? "Calibration capture"} />
+  ) : (
+    <div class="image-placeholder" />
+  );
 }
 
 function drawDetection(
   canvas: HTMLCanvasElement | null,
   detection: DetectionResult | undefined,
 ): void {
-  if (!canvas || !detection) return;
+  if (!canvas) return;
+  const context = canvas.getContext("2d");
+  if (!context) return;
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  if (!detection) return;
   canvas.width = detection.imageSize.width;
   canvas.height = detection.imageSize.height;
-  const context = canvas.getContext("2d")!;
-  context.clearRect(0, 0, canvas.width, canvas.height);
   context.fillStyle = detection.quality.basicValid ? "#6fffb0" : "#ffcc66";
   context.strokeStyle = "rgba(10, 18, 14, .8)";
   context.lineWidth = Math.max(1, canvas.width / 1000);
@@ -358,7 +400,10 @@ function drawDetection(
 }
 
 function ResultMatrix({ result }: { result: CalibrationResultV1 }) {
-  const [fx, , cx, , fy, cy] = result.cameraMatrix;
+  const fx = result.cameraMatrix[0];
+  const cx = result.cameraMatrix[2];
+  const fy = result.cameraMatrix[4];
+  const cy = result.cameraMatrix[5];
   return (
     <div class="metric-grid">
       <div><span>fx</span><strong>{fx.toFixed(3)}</strong></div>
@@ -455,10 +500,14 @@ function LiveResultPreview({
     let cancelled = false;
     let inFlight = false;
     let timer = 0;
+    let failed = false;
+    const scheduleCpuFrame = (delay: number) => {
+      if (!cancelled && !failed) timer = window.setTimeout(() => void renderFrame(), delay);
+    };
     const renderFrame = async () => {
       if (cancelled) return;
       if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || inFlight) {
-        timer = window.setTimeout(renderFrame, 200);
+        scheduleCpuFrame(200);
         return;
       }
       inFlight = true;
@@ -472,17 +521,20 @@ function LiveResultPreview({
           }
           const pixels = new Uint8ClampedArray(frame.rgba.length);
           pixels.set(frame.rgba);
-          canvas.getContext("2d")!.putImageData(
+          const context = canvas.getContext("2d");
+          if (!context) throw new Error("The browser could not create a 2D preview canvas.");
+          context.putImageData(
             new ImageData(pixels, frame.width, frame.height),
             0,
             0,
           );
         }
       } catch (error) {
+        failed = true;
         if (!cancelled) setPreviewError(errorText(error));
       } finally {
         inFlight = false;
-        timer = window.setTimeout(renderFrame, 100);
+        scheduleCpuFrame(100);
       }
     };
     void renderFrame();
@@ -497,8 +549,8 @@ function LiveResultPreview({
       <div class="panel-heading">
         <h2>Preview</h2>
         <div class="segmented">
-          <button type="button" class={!corrected ? "selected" : ""} onClick={() => setCorrected(false)}>Original</button>
-          <button type="button" class={corrected ? "selected" : ""} onClick={() => setCorrected(true)}>Corrected</button>
+          <button type="button" class={!corrected ? "selected" : ""} aria-pressed={!corrected} onClick={() => setCorrected(false)}>Original</button>
+          <button type="button" class={corrected ? "selected" : ""} aria-pressed={corrected} onClick={() => setCorrected(true)}>Corrected</button>
         </div>
       </div>
       {stream ? (
@@ -519,6 +571,7 @@ export function App() {
   const sessionRef = useRef(session);
   const [restoreCandidate, setRestoreCandidate] = useState<CalibrationSessionV1>();
   const [restoreResolved, setRestoreResolved] = useState(false);
+  const [restoreBusy, setRestoreBusy] = useState(false);
   const [worker, setWorker] = useState<CalibrationWorkerClient>();
   const [workerStatus, setWorkerStatus] = useState<"loading" | "ready" | "error">("loading");
   const [opencvVersion, setOpenCvVersion] = useState<string>();
@@ -544,6 +597,9 @@ export function App() {
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const captureBusyRef = useRef(false);
   const cameraBusyRef = useRef(false);
+  const importBusyRef = useRef(false);
+  const sessionGenerationRef = useRef(0);
+  const skipPristineSaveIdRef = useRef<string | undefined>(session.id);
   const saveTimerRef = useRef<number>();
 
   sessionRef.current = session;
@@ -571,19 +627,48 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    loadActiveSession()
-      .then((candidate) => {
-        if (candidate?.schemaVersion === 1 && candidate.observations.length > 0) {
+    let cancelled = false;
+    void loadActiveSession()
+      .then(async (stored) => {
+        const candidate = parseStoredSession(stored);
+        if (cancelled) return;
+        if (candidate && candidate.observations.length > 0) {
           setRestoreCandidate(candidate);
-        } else {
+          return;
+        }
+        if (stored !== undefined && !candidate) {
+          await clearLocalSession();
+          if (!cancelled) {
+            skipPristineSaveIdRef.current = sessionRef.current.id;
+            setStatus("An invalid saved session was removed.");
+          }
+        }
+        if (!cancelled) setRestoreResolved(true);
+      })
+      .catch((restoreError) => {
+        if (!cancelled) {
+          setStatus(`Session recovery is unavailable: ${errorText(restoreError)}`);
           setRestoreResolved(true);
         }
-      })
-      .catch(() => setRestoreResolved(true));
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
     if (!restoreResolved) return;
+    if (
+      skipPristineSaveIdRef.current === session.id &&
+      session.updatedAt === session.createdAt &&
+      session.observations.length === 0 &&
+      session.result === undefined
+    ) {
+      return;
+    }
+    if (skipPristineSaveIdRef.current === session.id) {
+      skipPristineSaveIdRef.current = undefined;
+    }
     clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
       saveActiveSession(session).catch((saveError) => {
@@ -597,6 +682,31 @@ export function App() {
     if (captureVideoRef.current) captureVideoRef.current.srcObject = stream ?? null;
   }, [stream, session.step]);
 
+  useEffect(() => {
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.enumerateDevices) return;
+    let cancelled = false;
+    const refreshDevices = async () => {
+      let nextDevices: MediaDeviceInfo[];
+      try {
+        nextDevices = await listVideoDevices();
+      } catch {
+        return;
+      }
+      if (cancelled) return;
+      setDevices(nextDevices);
+      setSelectedDeviceId((current) =>
+        current && !nextDevices.some((device) => device.deviceId === current) ? "" : current,
+      );
+    };
+    void refreshDevices();
+    mediaDevices.addEventListener?.("devicechange", refreshDevices);
+    return () => {
+      cancelled = true;
+      mediaDevices.removeEventListener?.("devicechange", refreshDevices);
+    };
+  }, []);
+
   const attachPreview = useCallback(
     (element: HTMLVideoElement | null) => {
       setupVideoRef.current = element;
@@ -606,15 +716,16 @@ export function App() {
   );
 
   const removeObservationData = useCallback(async (observations: FrameObservation[]) => {
-    await Promise.allSettled(
+    await deleteSessionBlobs(
       observations.flatMap((observation) => [
-        deleteSessionBlob(observation.imageBlobKey),
-        deleteSessionBlob(observation.thumbnailBlobKey),
+        observation.imageBlobKey,
+        observation.thumbnailBlobKey,
       ]),
     );
   }, []);
 
   const clearObservations = useCallback(async () => {
+    sessionGenerationRef.current += 1;
     await removeObservationData(sessionRef.current.observations);
     setSession((previous) =>
       updated(previous, { observations: [], result: undefined, imageSize: undefined }),
@@ -645,6 +756,10 @@ export function App() {
     setStream(undefined);
     setCapabilities(undefined);
     setCurrentDetection(undefined);
+    currentDetectionRef.current = undefined;
+    setCaptureDecision(undefined);
+    drawDetection(overlayRef.current, undefined);
+    captureGateRef.current.reset();
     try {
       const nextStream = await cameraRef.current.open({
         ...requestedSize,
@@ -663,14 +778,19 @@ export function App() {
         );
       }
       setStream(nextStream);
-      const availableDevices = await listVideoDevices().catch(() => []);
-      setDevices(availableDevices);
-      const active = availableDevices.find(
-        (device) =>
-          device.deviceId === settings.deviceId || device.label === settings.cameraLabel,
-      );
-      if (active) setSelectedDeviceId(active.deviceId);
+      try {
+        const availableDevices = await listVideoDevices();
+        setDevices(availableDevices);
+        const active = availableDevices.find(
+          (device) =>
+            device.deviceId === settings.deviceId || device.label === settings.cameraLabel,
+        );
+        if (active) setSelectedDeviceId(active.deviceId);
+      } catch {
+        // The active stream is usable even when device enumeration is temporarily unavailable.
+      }
     } catch (cameraError) {
+      if (isOperationCancellation(cameraError)) return;
       cameraRef.current.stop();
       setStream(undefined);
       setStatus(undefined);
@@ -704,8 +824,10 @@ export function App() {
         );
       }
     } catch (cameraError) {
-      setStatus(undefined);
-      setError(errorText(cameraError));
+      if (!isOperationCancellation(cameraError)) {
+        setStatus(undefined);
+        setError(errorText(cameraError));
+      }
     } finally {
       cameraBusyRef.current = false;
       setCameraBusy(false);
@@ -731,6 +853,9 @@ export function App() {
       setStream(undefined);
       setCapabilities(undefined);
       setCurrentDetection(undefined);
+      currentDetectionRef.current = undefined;
+      setCaptureDecision(undefined);
+      drawDetection(overlayRef.current, undefined);
       setStatus(undefined);
       setError(
         "Camera capture stopped unexpectedly. Close other apps using the camera, reconnect it if needed, and connect again.",
@@ -742,26 +867,40 @@ export function App() {
   }, [stream]);
 
   const applyZoom = useCallback(async (zoom: number) => {
+    if (cameraBusyRef.current) return;
+    cameraBusyRef.current = true;
+    setCameraBusy(true);
+    setError(undefined);
     try {
       const settings = await cameraRef.current.applyZoom(zoom);
-      if (sessionRef.current.observations.length) await clearObservations();
-      setSession((previous) => updated(previous, { captureSettings: settings, imageSize: settings }));
+      const pipelineChanged = await commitCameraSettings(settings);
       setStatus(`Zoom changed to ${zoom.toFixed(1)}×.`);
+      if (pipelineChanged) setStatus(`Zoom changed to ${zoom.toFixed(1)}×; previous captures were cleared.`);
     } catch (zoomError) {
-      setError(errorText(zoomError));
+      if (!isOperationCancellation(zoomError)) setError(errorText(zoomError));
+    } finally {
+      cameraBusyRef.current = false;
+      setCameraBusy(false);
     }
-  }, [clearObservations]);
+  }, [commitCameraSettings]);
 
   const applyFocusMode = useCallback(async (focusMode: string) => {
+    if (cameraBusyRef.current) return;
+    cameraBusyRef.current = true;
+    setCameraBusy(true);
+    setError(undefined);
     try {
       const settings = await cameraRef.current.applyFocusMode(focusMode);
-      if (sessionRef.current.observations.length) await clearObservations();
-      setSession((previous) => updated(previous, { captureSettings: settings }));
+      const pipelineChanged = await commitCameraSettings(settings);
       setStatus(`Focus mode changed to ${focusMode}.`);
+      if (pipelineChanged) setStatus(`Focus mode changed to ${focusMode}; previous captures were cleared.`);
     } catch (focusError) {
-      setError(errorText(focusError));
+      if (!isOperationCancellation(focusError)) setError(errorText(focusError));
+    } finally {
+      cameraBusyRef.current = false;
+      setCameraBusy(false);
     }
-  }, [clearObservations]);
+  }, [commitCameraSettings]);
 
   const storeObservation = useCallback(
     async (
@@ -770,21 +909,32 @@ export function App() {
       source: FrameObservation["source"],
       sourceName?: string,
       include = true,
+      generation = sessionGenerationRef.current,
     ): Promise<FrameObservation> => {
-      const headroom: { remaining?: number; quota?: number } = await storageHeadroom().catch(
-        () => ({}),
-      );
-      if (headroom.remaining !== undefined && headroom.remaining < imageBlob.size * 2) {
-        throw new Error("There is not enough browser storage to preserve another frame.");
-      }
       const id = createId("view");
       const imageBlobKey = `${id}-image`;
       const thumbnailBlobKey = `${id}-thumb`;
       const thumb = await thumbnailBlob(imageBlob);
-      await Promise.all([
-        putSessionBlob(imageBlobKey, imageBlob),
-        putSessionBlob(thumbnailBlobKey, thumb),
+      if (generation !== sessionGenerationRef.current) {
+        throw new SessionOperationCancelledError();
+      }
+      const headroom: { remaining?: number; quota?: number } = await storageHeadroom().catch(
+        () => ({}),
+      );
+      if (
+        headroom.remaining !== undefined &&
+        headroom.remaining < imageBlob.size + thumb.size
+      ) {
+        throw new Error("There is not enough browser storage to preserve another frame.");
+      }
+      await putSessionBlobs([
+        [imageBlobKey, imageBlob],
+        [thumbnailBlobKey, thumb],
       ]);
+      if (generation !== sessionGenerationRef.current) {
+        await deleteSessionBlobs([imageBlobKey, thumbnailBlobKey]).catch(() => undefined);
+        throw new SessionOperationCancelledError();
+      }
       const observation: FrameObservation = {
         id,
         source,
@@ -814,10 +964,10 @@ export function App() {
 
   const captureCurrentFrame = useCallback(
     async () => {
-      if (captureBusyRef.current) return;
+      if (captureBusyRef.current || importBusyRef.current) return;
       const detection = currentDetectionRef.current;
       const video = captureVideoRef.current;
-      if (!detection?.quality.basicValid || !video) {
+      if (!detection?.quality.basicValid || !isUsableDetection(detection) || !video) {
         setStatus("A valid board detection is required before capture.");
         return;
       }
@@ -826,13 +976,14 @@ export function App() {
         return;
       }
       captureBusyRef.current = true;
+      const generation = sessionGenerationRef.current;
       try {
         const blob = await videoFrameBlob(video);
-        await storeObservation(detection, blob, "live");
+        await storeObservation(detection, blob, "live", undefined, true, generation);
         captureGateRef.current.markCaptured();
         setStatus(`Captured view ${sessionRef.current.observations.length + 1}.`);
       } catch (captureError) {
-        setError(errorText(captureError));
+        if (!isOperationCancellation(captureError)) setError(errorText(captureError));
       } finally {
         captureBusyRef.current = false;
       }
@@ -841,7 +992,20 @@ export function App() {
   );
 
   useEffect(() => {
-    if (session.step !== "capture" || !stream || !worker || workerStatus !== "ready") return;
+    if (
+      session.step !== "capture" ||
+      !stream ||
+      !worker ||
+      workerStatus !== "ready" ||
+      importBusy
+    ) {
+      return;
+    }
+    captureGateRef.current.reset();
+    setCurrentDetection(undefined);
+    currentDetectionRef.current = undefined;
+    setCaptureDecision(undefined);
+    drawDetection(overlayRef.current, undefined);
     let cancelled = false;
     let requestHandle: number | undefined;
     let animationHandle: number | undefined;
@@ -849,11 +1013,23 @@ export function App() {
     let lastDetectionAt = 0;
 
     const schedule = (callback: (time: number) => void) => {
+      if (cancelled) return;
       const video = captureVideoRef.current;
       if (video?.requestVideoFrameCallback) {
         requestHandle = video.requestVideoFrameCallback((time) => callback(time));
       } else {
         animationHandle = requestAnimationFrame(callback);
+      }
+    };
+
+    const cancelScheduledFrame = () => {
+      if (requestHandle !== undefined) {
+        captureVideoRef.current?.cancelVideoFrameCallback?.(requestHandle);
+        requestHandle = undefined;
+      }
+      if (animationHandle !== undefined) {
+        cancelAnimationFrame(animationHandle);
+        animationHandle = undefined;
       }
     };
 
@@ -886,7 +1062,15 @@ export function App() {
         setCaptureDecision(decision);
         if (autoCapture && decision.accept) await captureCurrentFrame();
       } catch (detectionError) {
-        if (!cancelled) setError(errorText(detectionError));
+        if (!cancelled) {
+          cancelled = true;
+          cancelScheduledFrame();
+          setCurrentDetection(undefined);
+          currentDetectionRef.current = undefined;
+          setCaptureDecision(undefined);
+          drawDetection(overlayRef.current, undefined);
+          setError(errorText(detectionError));
+        }
       } finally {
         inFlight = false;
       }
@@ -894,81 +1078,106 @@ export function App() {
     schedule((time) => void next(time));
     return () => {
       cancelled = true;
-      if (requestHandle !== undefined) captureVideoRef.current?.cancelVideoFrameCallback?.(requestHandle);
-      if (animationHandle !== undefined) cancelAnimationFrame(animationHandle);
+      cancelScheduledFrame();
     };
-  }, [session.step, stream, worker, workerStatus, autoCapture, captureCurrentFrame]);
+  }, [session.step, stream, worker, workerStatus, autoCapture, importBusy, captureCurrentFrame]);
 
   const chooseImportFiles = useCallback(async (files: File[]) => {
+    if (files.length === 0 || importBusyRef.current) return;
+    importBusyRef.current = true;
+    setImportBusy(true);
     setError(undefined);
-    const supported = files.filter(
-      (file) => /image\/(jpeg|png|webp)/.test(file.type) && file.size <= MAX_FILE_BYTES,
-    );
+    const supported = files
+      .filter(
+        (file) =>
+          /^image\/(?:jpeg|png|webp)$/.test(file.type) &&
+          file.size > 0 &&
+          file.size <= MAX_FILE_BYTES,
+      )
+      .slice(0, MAX_IMPORT_FILES);
     if (supported.length === 0) {
       setError("Choose JPEG, PNG, or WebP images no larger than 25 MB each.");
+      importBusyRef.current = false;
+      setImportBusy(false);
       return;
     }
-    if (supported.length > MAX_IMPORT_FILES) supported.length = MAX_IMPORT_FILES;
     const totalBytes = supported.reduce((sum, file) => sum + file.size, 0);
-    if (totalBytes > MAX_SESSION_BYTES) {
-      setError(`The selected images total ${humanBytes(totalBytes)}; the session limit is 250 MB.`);
+    if (totalBytes > MAX_IMPORT_BYTES) {
+      setError(`The selected images total ${humanBytes(totalBytes)}; the import limit is 250 MB.`);
+      importBusyRef.current = false;
+      setImportBusy(false);
       return;
     }
     setStatus("Reading image dimensions…");
     try {
       const groups = await groupImageFiles(supported);
+      const onlyGroup = groups[0];
+      if (!onlyGroup) throw new Error("No readable images were selected.");
       setImportGroups(groups);
       setStatus(
         groups.length > 1
           ? "The images use multiple resolutions. Choose one resolution group."
-          : `${groups[0].files.length} images ready to process.`,
+          : `${onlyGroup.files.length} images ready to process.`,
       );
     } catch (importError) {
       setError(errorText(importError));
+    } finally {
+      importBusyRef.current = false;
+      setImportBusy(false);
     }
   }, []);
 
   const processImportGroup = useCallback(
     async (group: ImageFileGroup) => {
-      if (!worker || workerStatus !== "ready") return;
+      if (!worker || workerStatus !== "ready" || importBusyRef.current) return;
+      importBusyRef.current = true;
       setImportBusy(true);
       setError(undefined);
       try {
+        let generation = sessionGenerationRef.current;
+        let initiallyIncluded = sessionRef.current.observations.filter(
+          (view) => view.included,
+        ).length;
         if (sessionRef.current.imageSize && !sameSize(sessionRef.current.imageSize, group)) {
           await clearObservations();
+          generation = sessionGenerationRef.current;
+          initiallyIncluded = 0;
           setStatus("Existing captures were cleared because the imported resolution is different.");
         }
         let accepted = 0;
         let rejected = 0;
         let skippedByLimit = 0;
-        const initiallyIncluded = sessionRef.current.observations.filter(
-          (view) => view.included,
-        ).length;
-        for (let index = 0; index < group.files.length; index += 1) {
-          const file = group.files[index];
+        for (const [index, file] of group.files.entries()) {
+          if (generation !== sessionGenerationRef.current) {
+            throw new SessionOperationCancelledError();
+          }
+          if (initiallyIncluded + accepted >= 30) {
+            skippedByLimit = group.files.length - index;
+            break;
+          }
           setStatus(`Processing ${index + 1} of ${group.files.length}: ${file.name}`);
           const bitmap = await decodeImage(file);
           const detection = await worker.detect(bitmap, sessionRef.current.pattern);
-          if (!detection.quality.basicValid) {
+          if (generation !== sessionGenerationRef.current) {
+            throw new SessionOperationCancelledError();
+          }
+          if (!detection.quality.basicValid || !isUsableDetection(detection)) {
             rejected += 1;
             continue;
           }
-          if (initiallyIncluded + accepted >= 30) {
-            skippedByLimit += 1;
-            continue;
-          }
-          await storeObservation(detection, file, "upload", file.name);
+          await storeObservation(detection, file, "upload", file.name, true, generation);
           accepted += 1;
         }
         setImportGroups([]);
         setStatus(
           `Imported ${accepted} valid views; ${rejected} images did not contain a usable board${
-            skippedByLimit ? `; ${skippedByLimit} valid images exceeded the 30-view limit` : ""
+            skippedByLimit ? `; ${skippedByLimit} images were not processed after reaching the 30-view limit` : ""
           }.`,
         );
       } catch (importError) {
-        setError(errorText(importError));
+        if (!isOperationCancellation(importError)) setError(errorText(importError));
       } finally {
+        importBusyRef.current = false;
         setImportBusy(false);
       }
     },
@@ -977,6 +1186,7 @@ export function App() {
 
   const solveCalibration = useCallback(async () => {
     if (!worker || !session.imageSize || progress.accepted < 12) return;
+    const generation = sessionGenerationRef.current;
     setSolving(true);
     setError(undefined);
     try {
@@ -987,6 +1197,7 @@ export function App() {
         session.imageSize,
         session.captureSettings,
       );
+      if (generation !== sessionGenerationRef.current) return;
       const included = new Set(result.includedViewIds);
       setSession((previous) =>
         updated(previous, {
@@ -1025,19 +1236,73 @@ export function App() {
   }, [worker, session.pattern]);
 
   const resetEverything = useCallback(async () => {
+    sessionGenerationRef.current += 1;
+    clearTimeout(saveTimerRef.current);
     cameraRef.current.stop();
+    if (setupVideoRef.current) setupVideoRef.current.srcObject = null;
+    if (captureVideoRef.current) captureVideoRef.current.srcObject = null;
     setStream(undefined);
-    await clearLocalSession().catch(() => undefined);
-    setSession(freshSession());
-    captureGateRef.current.reset();
-    setCurrentDetection(undefined);
-    setStatus("Local session data was deleted.");
+    setCapabilities(undefined);
+    setError(undefined);
+    try {
+      await clearLocalSession();
+      const nextSession = freshSession();
+      skipPristineSaveIdRef.current = nextSession.id;
+      setSession(nextSession);
+      captureGateRef.current.reset();
+      setCurrentDetection(undefined);
+      currentDetectionRef.current = undefined;
+      setCaptureDecision(undefined);
+      drawDetection(overlayRef.current, undefined);
+      setImportGroups([]);
+      importBusyRef.current = false;
+      setImportBusy(false);
+      setRestoreCandidate(undefined);
+      setRestoreResolved(true);
+      setStatus("Local session data was deleted.");
+    } catch (resetError) {
+      setStatus(undefined);
+      setError(`Local data could not be deleted: ${errorText(resetError)}`);
+    }
   }, []);
+
+  const discardRestore = useCallback(async () => {
+    if (restoreBusy) return;
+    setRestoreBusy(true);
+    setError(undefined);
+    try {
+      await clearLocalSession();
+      const currentSession = sessionRef.current;
+      if (
+        currentSession.updatedAt === currentSession.createdAt &&
+        currentSession.observations.length === 0
+      ) {
+        skipPristineSaveIdRef.current = currentSession.id;
+      }
+      setRestoreCandidate(undefined);
+      setRestoreResolved(true);
+      setStatus("Saved session discarded.");
+    } catch (discardError) {
+      setError(`Saved session could not be discarded: ${errorText(discardError)}`);
+    } finally {
+      setRestoreBusy(false);
+    }
+  }, [restoreBusy]);
 
   const setStep = (step: AppStep) => setSession((previous) => updated(previous, { step }));
   const setPattern = (pattern: PatternConfig) => {
-    void removeObservationData(sessionRef.current.observations);
+    sessionGenerationRef.current += 1;
+    const observations = sessionRef.current.observations;
+    if (observations.length > 0) {
+      void removeObservationData(observations).catch((storageError) => {
+        setStatus(`Old capture images could not be removed: ${errorText(storageError)}`);
+      });
+    }
     captureGateRef.current.reset();
+    setCurrentDetection(undefined);
+    currentDetectionRef.current = undefined;
+    setCaptureDecision(undefined);
+    drawDetection(overlayRef.current, undefined);
     setSession((previous) =>
       updated(previous, { pattern, observations: [], imageSize: undefined, result: undefined }),
     );
@@ -1069,21 +1334,21 @@ export function App() {
                 {stream ? <video ref={attachPreview} autoplay muted playsinline /> : <div class="empty-preview"><p>No camera connected</p></div>}
               </div>
               <div class="form-grid">
-                <label class="field span-two"><span>Camera</span><select value={selectedDeviceId} disabled={cameraBusy} onChange={(event) => selectCamera(event.currentTarget.value)}><option value="">Default camera</option>{devices.map((device, index) => <option value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>)}</select></label>
-                <label class="field span-two"><span>Requested resolution</span><select value={`${requestedSize.width}x${requestedSize.height}`} disabled={cameraBusy} onChange={(event) => { const [width, height] = event.currentTarget.value.split("x").map(Number); setRequestedSize({ width, height }); }}>{RESOLUTION_PRESETS.map((size) => <option value={`${size.width}x${size.height}`}>{size.label}</option>)}</select></label>
-                <label class="field span-two"><span>Lens model</span><select value={session.lensModel} onChange={(event) => setSession((previous) => updated(previous, { lensModel: event.currentTarget.value as LensModel, result: undefined }))}><option value="pinhole-radtan5">Standard lens · radial/tangential 5</option><option value="fisheye-kb4">Fisheye · four coefficients</option></select></label>
+                <label class="field span-two"><span>Camera</span><select value={selectedDeviceId} disabled={cameraBusy} onChange={(event) => selectCamera(event.currentTarget.value)}><option value="">Default camera</option>{devices.map((device, index) => <option key={`${device.deviceId}-${index}`} value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>)}</select></label>
+                <label class="field span-two"><span>Requested resolution</span><select value={`${requestedSize.width}x${requestedSize.height}`} disabled={cameraBusy} onChange={(event) => { const selected = RESOLUTION_PRESETS.find((size) => `${size.width}x${size.height}` === event.currentTarget.value); if (selected) setRequestedSize({ width: selected.width, height: selected.height }); }}>{RESOLUTION_PRESETS.map((size) => <option key={`${size.width}x${size.height}`} value={`${size.width}x${size.height}`}>{size.label}</option>)}</select></label>
+                <label class="field span-two"><span>Lens model</span><select value={session.lensModel} onChange={(event) => { const lensModel = event.currentTarget.value as LensModel; setSession((previous) => updated(previous, { lensModel, result: undefined })); }}><option value="pinhole-radtan5">Standard lens · radial/tangential 5</option><option value="fisheye-kb4">Fisheye · four coefficients</option></select></label>
               </div>
               <div class="button-row"><button type="button" class="button secondary" disabled={cameraBusy} onClick={() => void applyCameraSettings()}>{cameraBusy ? "Working…" : stream ? "Apply resolution" : "Connect camera"}</button></div>
               {session.captureSettings && <dl class="settings-summary"><div><dt>Actual stream</dt><dd>{session.captureSettings.width} × {session.captureSettings.height}</dd></div><div><dt>Frame rate</dt><dd>{session.captureSettings.frameRate?.toFixed(1) ?? "Browser default"}</dd></div><div><dt>Resize mode</dt><dd>{session.captureSettings.resizeMode ?? "Not reported"}</dd></div></dl>}
               {capabilities?.zoom && <label class="field"><span>Optical/digital zoom: {session.captureSettings?.zoom?.toFixed(1) ?? capabilities.zoom.min.toFixed(1)}×</span><input type="range" min={capabilities.zoom.min} max={capabilities.zoom.max} step={capabilities.zoom.step || 0.1} value={session.captureSettings?.zoom ?? capabilities.zoom.min} disabled={cameraBusy} onChange={(event) => void applyZoom(Number(event.currentTarget.value))} /></label>}
-              {capabilities?.focusMode && <label class="field"><span>Focus mode</span><select value={session.captureSettings?.focusMode} disabled={cameraBusy} onChange={(event) => void applyFocusMode(event.currentTarget.value)}>{capabilities.focusMode.map((mode) => <option value={mode}>{mode}</option>)}</select></label>}
+              {capabilities?.focusMode && <label class="field"><span>Focus mode</span><select value={session.captureSettings?.focusMode} disabled={cameraBusy} onChange={(event) => void applyFocusMode(event.currentTarget.value)}>{capabilities.focusMode.map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select></label>}
             </section>
 
             <PatternEditor pattern={session.pattern} onChange={setPattern} />
 
             <section class="panel setup-actions">
               <div><h2>Target file</h2><p class="muted">Print at 100%. Verify the 100 mm ruler.</p></div>
-              {patternErrors.map((message) => <Status tone="error">{message}</Status>)}
+              {patternErrors.map((message) => <Status key={message} tone="error">{message}</Status>)}
               <div class="button-row"><button type="button" class="button secondary" disabled={workerStatus !== "ready" || patternErrors.length > 0} onClick={() => void downloadPattern()}>Download board SVG</button><button type="button" class="button primary" disabled={workerStatus !== "ready" || patternErrors.length > 0} onClick={() => setStep("capture")}>Start capture</button></div>
             </section>
           </div>
@@ -1095,8 +1360,8 @@ export function App() {
               <div class="panel-heading"><h2>Capture</h2><label class="switch"><input type="checkbox" checked={autoCapture} onChange={(event) => setAutoCapture(event.currentTarget.checked)} /><span /> Auto capture</label></div>
               {stream ? <div class="camera-preview live"><video ref={captureVideoRef} autoplay muted playsinline /><canvas ref={overlayRef} /><div class="view-counter">{progress.accepted}<small>/ 20 views</small></div></div> : <div class="empty-capture"><span>Camera is not connected.</span><button type="button" class="button secondary" onClick={() => setStep("setup")}>Configure camera</button></div>}
               <div class="capture-message"><span class={currentDetection?.quality.basicValid ? "signal good" : "signal"} /> <strong>{captureDecision?.reasons[0] ?? "Show the entire board to the camera."}</strong></div>
-              <div class="button-row"><button type="button" class="button secondary" disabled={!currentDetection?.quality.basicValid || !stream || progress.accepted >= 30} onClick={() => void captureCurrentFrame()}>Capture now</button><label class="button secondary file-button">Import images<input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => void chooseImportFiles(Array.from(event.currentTarget.files ?? []))} /></label><button type="button" class="button secondary" onClick={() => setStep("setup")}>Camera settings</button><button type="button" class="button primary" disabled={!progress.minimumReached} onClick={() => setStep("review")}>Review {progress.accepted} views</button></div>
-              {importGroups.length > 0 && <div class="import-groups"><h3>Choose one resolution</h3>{importGroups.map((group) => <button type="button" disabled={importBusy} onClick={() => void processImportGroup(group)}><strong>{group.width} × {group.height}</strong><span>{group.files.length} images</span></button>)}</div>}
+              <div class="button-row"><button type="button" class="button secondary" disabled={importBusy || !captureDecision?.basicValid || !stream || progress.accepted >= 30} onClick={() => void captureCurrentFrame()}>Capture now</button><label class={`button secondary file-button${importBusy ? " disabled" : ""}`}>Import images<input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={importBusy} onChange={(event) => { const input = event.currentTarget; const files = Array.from(input.files ?? []); input.value = ""; void chooseImportFiles(files); }} /></label><button type="button" class="button secondary" disabled={importBusy} onClick={() => setStep("setup")}>Camera settings</button><button type="button" class="button primary" disabled={importBusy || !progress.minimumReached} onClick={() => setStep("review")}>Review {progress.accepted} views</button></div>
+              {importGroups.length > 0 && <div class="import-groups"><h3>Choose one resolution</h3>{importGroups.map((group) => <button key={group.key} type="button" disabled={importBusy} onClick={() => void processImportGroup(group)}><strong>{group.width} × {group.height}</strong><span>{group.files.length} images</span></button>)}</div>}
             </section>
             <aside class="panel capture-guide"><h2>Coverage</h2><CoverageGrid observations={session.observations} /><dl class="progress-list"><div><dt>Views</dt><dd>{progress.accepted} / 20</dd></div><div><dt>Cells</dt><dd>{progress.occupiedCells} / 6</dd></div><div><dt>Tilted</dt><dd>{progress.tiltedViews} / 4</dd></div><div><dt>Scale</dt><dd>{progress.scaleRatio.toFixed(1)}× / 1.8×</dd></div></dl><p class="capture-hint">Cover edges and corners. Vary distance and tilt.</p>{progress.targetReached && <Status tone="success">Coverage target reached.</Status>}</aside>
           </div>
@@ -1104,8 +1369,21 @@ export function App() {
 
         {session.step === "review" && (
           <div class="review-layout">
-            <section class="panel review-summary"><div><h2>Views ({progress.accepted} included)</h2><p class="muted">Toggle views before calibration.</p></div><CoverageGrid observations={session.observations} /><div class="button-row"><button type="button" class="button secondary" onClick={() => setStep("capture")}>Add views</button><button type="button" class="button primary" disabled={!progress.minimumReached || solving} onClick={() => void solveCalibration()}>{solving ? "Solving…" : "Run calibration"}</button></div></section>
-            <section class="observation-grid" aria-label="Captured calibration views">{session.observations.map((observation, index) => <article class={`observation-card ${observation.included ? "" : "excluded"}`}><div class="observation-image"><ObservationThumbnail observation={observation} /><span>#{index + 1}</span></div><div class="observation-details"><strong>{observation.sourceName ?? `${observation.source} capture`}</strong><small>{observation.quality.detectedCorners} corners · sharpness {observation.quality.sharpness.toFixed(0)}</small>{observation.perViewRms !== undefined && <small>RMS {observation.perViewRms.toFixed(3)} px</small>}<label class="check"><input type="checkbox" checked={observation.included} onChange={(event) => setSession((previous) => updated(previous, { observations: previous.observations.map((candidate) => candidate.id === observation.id ? { ...candidate, included: event.currentTarget.checked, autoExcludedReason: undefined } : candidate), result: undefined }))} /> Include view</label></div></article>)}</section>
+            <section class="panel review-summary"><div><h2>Views ({progress.accepted} included)</h2><p class="muted">Toggle views before calibration.</p></div><CoverageGrid observations={session.observations} /><div class="button-row"><button type="button" class="button secondary" disabled={solving} onClick={() => setStep("capture")}>Add views</button><button type="button" class="button primary" disabled={!progress.minimumReached || solving} onClick={() => void solveCalibration()}>{solving ? "Solving…" : "Run calibration"}</button></div></section>
+            <section class="observation-grid" aria-label="Captured calibration views">
+              {session.observations.map((observation, index) => (
+                <article key={observation.id} class={`observation-card ${observation.included ? "" : "excluded"}`}>
+                  <div class="observation-image"><ObservationThumbnail observation={observation} /><span>#{index + 1}</span></div>
+                  <div class="observation-details">
+                    <strong>{observation.sourceName ?? `${observation.source} capture`}</strong>
+                    <small>{observation.quality.detectedCorners} corners · sharpness {observation.quality.sharpness.toFixed(0)}</small>
+                    {observation.perViewRms !== undefined && <small>RMS {observation.perViewRms.toFixed(3)} px</small>}
+                    {observation.autoExcludedReason && <small>{observation.autoExcludedReason}</small>}
+                    <label class="check"><input type="checkbox" checked={observation.included} disabled={solving} onChange={(event) => { const included = event.currentTarget.checked; setSession((previous) => updated(previous, { observations: previous.observations.map((candidate) => candidate.id === observation.id ? { ...candidate, included, autoExcludedReason: undefined } : candidate), result: undefined })); }} /> Include view</label>
+                  </div>
+                </article>
+              ))}
+            </section>
           </div>
         )}
 
@@ -1119,7 +1397,7 @@ export function App() {
 
       <footer><button type="button" onClick={() => void resetEverything()}>Delete local data</button><span>{opencvVersion ? `OpenCV ${opencvVersion}` : "OpenCV unavailable"}</span></footer>
 
-      {restoreCandidate && !restoreResolved && <div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="restore-title"><h2 id="restore-title">Restore session?</h2><p>{restoreCandidate.observations.length} views saved {new Date(restoreCandidate.updatedAt).toLocaleString()}.</p><div class="button-row"><button type="button" class="button secondary" onClick={() => { void clearLocalSession(); setRestoreCandidate(undefined); setRestoreResolved(true); }}>Discard</button><button type="button" class="button primary" onClick={() => { setSession(restoreCandidate); setRestoreCandidate(undefined); setRestoreResolved(true); }}>Restore</button></div></div></div>}
+      {restoreCandidate && !restoreResolved && <div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="restore-title"><h2 id="restore-title">Restore session?</h2><p>{restoreCandidate.observations.length} views saved {new Date(restoreCandidate.updatedAt).toLocaleString()}.</p><div class="button-row"><button type="button" class="button secondary" disabled={restoreBusy} onClick={() => void discardRestore()}>{restoreBusy ? "Discarding…" : "Discard"}</button><button type="button" class="button primary" disabled={restoreBusy} onClick={() => { sessionGenerationRef.current += 1; setSession(restoreCandidate); setRestoreCandidate(undefined); setRestoreResolved(true); setStatus("Saved session restored."); }}>Restore</button></div></div></div>}
     </div>
   );
 }

@@ -43,6 +43,7 @@ The resolution selector first requests exact width and height constraints, then 
 
 ```bash
 npm run check
+npm run test:wasm
 npm run build
 ```
 

@@ -14,7 +14,14 @@ find_package(OpenCV 4.13 REQUIRED COMPONENTS core imgproc calib3d objdetect)
 add_executable(calibration calibration_bindings.cpp)
 target_include_directories(calibration PRIVATE ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(calibration PRIVATE ${OpenCV_LIBS})
-target_compile_options(calibration PRIVATE -O3 -msimd128 -fexceptions)
+target_compile_options(calibration PRIVATE
+  -O3
+  -msimd128
+  -fexceptions
+  -Wall
+  -Wextra
+  -Wpedantic
+)
 
 target_link_options(calibration PRIVATE
   --bind

@@ -1,7 +1,10 @@
 import type { CalibrationResultV1 } from "../domain/types";
 
 function yamlNumber(value: number): string {
-  return Number.isFinite(value) ? value.toPrecision(15).replace(/\.?0+$/, "") : ".nan";
+  if (!Number.isFinite(value)) return ".nan";
+  const [mantissa = "0", exponent] = value.toPrecision(15).split("e");
+  const compactMantissa = mantissa.replace(/(?:\.0+|(?:(\.\d*?)0+))$/, "$1");
+  return exponent === undefined ? compactMantissa : `${compactMantissa}e${exponent}`;
 }
 
 function yamlQuoted(value: string): string {

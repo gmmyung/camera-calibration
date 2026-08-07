@@ -32,4 +32,15 @@ describe("calibration exports", () => {
   it("round-trips the versioned JSON", () => {
     expect(JSON.parse(resultJson(result))).toEqual(result);
   });
+
+  it("preserves small values written in scientific notation", () => {
+    const yaml = toOpenCvYaml({
+      ...result,
+      distortion: [1e-10, -2.5e-12, 1.25e20, 0, 0],
+    });
+    expect(yaml).toContain("1e-10");
+    expect(yaml).toContain("-2.5e-12");
+    expect(yaml).toContain("1.25e+20");
+    expect(yaml).not.toContain("e-1,");
+  });
 });

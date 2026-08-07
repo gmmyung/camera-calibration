@@ -1,4 +1,13 @@
-import type { CharucoPatternConfig, ChessboardPatternConfig, PatternConfig } from "./types";
+import type {
+  CharucoPatternConfig,
+  ChessboardPatternConfig,
+  DictionaryName,
+  PatternConfig,
+} from "./types";
+
+export const MIN_PATTERN_GRID_SIZE = 3;
+export const MAX_PATTERN_GRID_SIZE = 30;
+export const MAX_PATTERN_LENGTH_MM = 10_000;
 
 export const CHARUCO_PRESET: CharucoPatternConfig = {
   kind: "charuco",
@@ -24,6 +33,16 @@ export function availableCornerCount(pattern: PatternConfig): number {
   return pattern.innerCornersX * pattern.innerCornersY;
 }
 
+export function charucoMarkerCount(pattern: CharucoPatternConfig): number {
+  return Math.floor((pattern.squaresX * pattern.squaresY) / 2);
+}
+
+export function dictionaryMarkerCapacity(dictionary: DictionaryName): number {
+  if (dictionary === "DICT_ARUCO_ORIGINAL") return 1_024;
+  const suffix = dictionary.match(/_(50|100|250|1000)$/)?.[1];
+  return suffix ? Number(suffix) : 0;
+}
+
 export function patternLabel(pattern: PatternConfig): string {
   return pattern.kind === "charuco"
     ? `ChArUco ${pattern.squaresX}×${pattern.squaresY}`
@@ -32,18 +51,54 @@ export function patternLabel(pattern: PatternConfig): string {
 
 export function validatePattern(pattern: PatternConfig): string[] {
   const errors: string[] = [];
-  if (pattern.squareLengthMm <= 0 || !Number.isFinite(pattern.squareLengthMm)) {
-    errors.push("Square length must be greater than zero.");
+  if (
+    !Number.isFinite(pattern.squareLengthMm) ||
+    pattern.squareLengthMm <= 0 ||
+    pattern.squareLengthMm > MAX_PATTERN_LENGTH_MM
+  ) {
+    errors.push(`Square length must be between 0 and ${MAX_PATTERN_LENGTH_MM} mm.`);
   }
   if (pattern.kind === "charuco") {
-    if (pattern.squaresX < 3 || pattern.squaresY < 3) {
-      errors.push("A ChArUco board needs at least 3×3 squares.");
+    if (
+      !Number.isInteger(pattern.squaresX) ||
+      !Number.isInteger(pattern.squaresY) ||
+      pattern.squaresX < MIN_PATTERN_GRID_SIZE ||
+      pattern.squaresY < MIN_PATTERN_GRID_SIZE ||
+      pattern.squaresX > MAX_PATTERN_GRID_SIZE ||
+      pattern.squaresY > MAX_PATTERN_GRID_SIZE
+    ) {
+      errors.push(
+        `ChArUco dimensions must be whole numbers from ${MIN_PATTERN_GRID_SIZE} to ${MAX_PATTERN_GRID_SIZE}.`,
+      );
     }
-    if (pattern.markerLengthMm <= 0 || pattern.markerLengthMm >= pattern.squareLengthMm) {
+    if (
+      !Number.isFinite(pattern.markerLengthMm) ||
+      pattern.markerLengthMm <= 0 ||
+      pattern.markerLengthMm > MAX_PATTERN_LENGTH_MM ||
+      pattern.markerLengthMm >= pattern.squareLengthMm
+    ) {
       errors.push("Marker length must be positive and smaller than the square length.");
     }
-  } else if (pattern.innerCornersX < 3 || pattern.innerCornersY < 3) {
-    errors.push("A chessboard needs at least 3×3 inner corners.");
+    if (
+      Number.isInteger(pattern.squaresX) &&
+      Number.isInteger(pattern.squaresY) &&
+      charucoMarkerCount(pattern) > dictionaryMarkerCapacity(pattern.dictionary)
+    ) {
+      errors.push(
+        `${pattern.dictionary} contains too few markers for this board (${charucoMarkerCount(pattern)} required).`,
+      );
+    }
+  } else if (
+    !Number.isInteger(pattern.innerCornersX) ||
+    !Number.isInteger(pattern.innerCornersY) ||
+    pattern.innerCornersX < MIN_PATTERN_GRID_SIZE ||
+    pattern.innerCornersY < MIN_PATTERN_GRID_SIZE ||
+    pattern.innerCornersX > MAX_PATTERN_GRID_SIZE ||
+    pattern.innerCornersY > MAX_PATTERN_GRID_SIZE
+  ) {
+    errors.push(
+      `Chessboard dimensions must be whole numbers from ${MIN_PATTERN_GRID_SIZE} to ${MAX_PATTERN_GRID_SIZE}.`,
+    );
   }
   return errors;
 }

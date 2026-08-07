@@ -70,4 +70,17 @@ describe("WebGL undistortion uniforms", () => {
       frameCalibrationUniforms(calibration("fisheye-kb4", [0.1, 0.2, 0.3]), 1280, 720),
     ).toThrow("four distortion coefficients");
   });
+
+  it("rejects non-positive focal lengths and non-finite values", () => {
+    const invalidFocal = calibration("pinhole-radtan5", [0, 0, 0, 0, 0]);
+    invalidFocal.cameraMatrix[0] = 0;
+    expect(() => frameCalibrationUniforms(invalidFocal, 1280, 720)).toThrow(
+      "invalid focal lengths",
+    );
+
+    const invalidDistortion = calibration("fisheye-kb4", [0, 0, Number.NaN, 0]);
+    expect(() => frameCalibrationUniforms(invalidDistortion, 1280, 720)).toThrow(
+      "non-finite values",
+    );
+  });
 });
