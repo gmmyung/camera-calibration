@@ -322,8 +322,8 @@ footer button { padding: 4px 7px; border: 0; border-bottom: 1px solid #747b81; b
   .hero-copy { display: block; }
   .hero-copy h1 { font-size: 21px; }
   .hero-copy p { margin-top: 5px; }
-  .stepper li { justify-content: center; padding: 0 5px; font-size: 0; }
-  .stepper li span { font-size: 11px; }
+  .stepper li { justify-content: center; padding: 0 5px; font-size: 11px; }
+  .stepper li span { display: none; }
   .panel { padding: 13px; }
   .form-grid { grid-template-columns: 1fr; }
   .span-two { grid-column: span 1; }
