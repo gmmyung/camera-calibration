@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CameraController } from "../src/lib/camera";
 
 function fakeTrack(options: { capabilities?: MediaTrackCapabilities } = {}) {
@@ -34,6 +34,10 @@ describe("CameraController", () => {
       value: { getUserMedia: vi.fn(), enumerateDevices: vi.fn() },
       configurable: true,
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("requests exact dimensions, then falls back to ideal dimensions", async () => {
@@ -78,5 +82,48 @@ describe("CameraController", () => {
     expect(track.applyConstraints.mock.calls[0][0].width).toEqual({ exact: 3840 });
     expect(track.applyConstraints.mock.calls[1][0].width).toEqual({ ideal: 3840 });
     expect(controller.capabilities()).toBeUndefined();
+  });
+
+  it("retries a transient camera capture failure once", async () => {
+    vi.useFakeTimers();
+    const track = fakeTrack();
+    const getUserMedia = vi
+      .fn()
+      .mockRejectedValueOnce({
+        name: "NotReadableError",
+        message: "A MediaStreamTrack ended due to a capture failure",
+      })
+      .mockResolvedValueOnce(fakeStream(track));
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: getUserMedia });
+
+    const opening = new CameraController().open({ width: 1280, height: 720 });
+    await vi.runAllTimersAsync();
+    await opening;
+
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(getUserMedia.mock.calls[1][0].video.width).toEqual({ exact: 1280 });
+  });
+
+  it("stops the previous track before opening another camera", async () => {
+    vi.useFakeTimers();
+    const firstTrack = fakeTrack();
+    const secondTrack = fakeTrack();
+    const getUserMedia = vi
+      .fn()
+      .mockResolvedValueOnce(fakeStream(firstTrack))
+      .mockResolvedValueOnce(fakeStream(secondTrack));
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: getUserMedia });
+    const controller = new CameraController();
+
+    const firstOpening = controller.open({ width: 1280, height: 720 });
+    await vi.runAllTimersAsync();
+    await firstOpening;
+    const secondOpening = controller.open({ width: 1920, height: 1080 });
+
+    expect(firstTrack.stop).toHaveBeenCalledOnce();
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    await vi.runAllTimersAsync();
+    await secondOpening;
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
   });
 });

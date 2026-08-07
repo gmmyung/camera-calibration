@@ -32,6 +32,7 @@ target_link_options(calibration PRIVATE
   "-sNO_EXIT_RUNTIME=1"
   "-sASSERTIONS=0"
   "-sDISABLE_EXCEPTION_CATCHING=0"
+  "-sEXPORTED_RUNTIME_METHODS=getExceptionMessage,decrementExceptionRefcount"
 )
 
 set_target_properties(calibration PROPERTIES SUFFIX ".js")

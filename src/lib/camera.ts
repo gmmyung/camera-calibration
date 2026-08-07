@@ -51,29 +51,63 @@ function isOverconstrained(error: unknown): boolean {
   );
 }
 
+const CAMERA_RELEASE_DELAY_MS = 300;
+const CAPTURE_RETRY_DELAY_MS = 500;
+const TRACK_STARTUP_GRACE_MS = 100;
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function errorProperty(error: unknown, property: "name" | "message"): string {
+  if (typeof error !== "object" || error === null || !(property in error)) return "";
+  const value = (error as Record<string, unknown>)[property];
+  return typeof value === "string" ? value : "";
+}
+
+function isTransientCaptureFailure(error: unknown): boolean {
+  const name = errorProperty(error, "name");
+  const message = errorProperty(error, "message");
+  return (
+    name === "NotReadableError" ||
+    name === "AbortError" ||
+    /capture failure|could not start (?:the )?video source|starting video failed/i.test(message)
+  );
+}
+
+function captureFailure(message: string): Error {
+  const error = new Error(message);
+  error.name = "NotReadableError";
+  return error;
+}
+
+function stopStream(stream: MediaStream | undefined): void {
+  stream?.getTracks().forEach((track) => track.stop());
+}
+
 export class CameraController {
   private stream?: MediaStream;
   private track?: MediaStreamTrack;
 
   async open(request: CameraRequest): Promise<MediaStream> {
-    this.stop();
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error("This browser does not support camera capture. You can still import images.");
     }
+
+    const releasedActiveStream = this.stop();
+    if (releasedActiveStream) await wait(CAMERA_RELEASE_DELAY_MS);
+
+    let capture: { stream: MediaStream; track: MediaStreamTrack };
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: videoConstraints(request, true),
-      });
+      capture = await this.acquireWithRetry(request, true);
     } catch (error) {
       if (!isOverconstrained(error)) throw error;
-      this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: videoConstraints(request, false),
-      });
+      capture = await this.acquireWithRetry(request, false);
     }
-    this.track = this.stream.getVideoTracks()[0];
-    return this.stream;
+
+    this.stream = capture.stream;
+    this.track = capture.track;
+    return capture.stream;
   }
 
   async applyResolution(size: ImageSize): Promise<CameraSettingsSnapshot> {
@@ -134,10 +168,47 @@ export class CameraController {
     return this.stream;
   }
 
-  stop(): void {
-    this.stream?.getTracks().forEach((track) => track.stop());
+  stop(): boolean {
+    const activeStream = this.stream;
     this.stream = undefined;
     this.track = undefined;
+    stopStream(activeStream);
+    return Boolean(activeStream);
+  }
+
+  private async acquireWithRetry(
+    request: CameraRequest,
+    exact: boolean,
+  ): Promise<{ stream: MediaStream; track: MediaStreamTrack }> {
+    try {
+      return await this.acquire(request, exact);
+    } catch (error) {
+      if (!isTransientCaptureFailure(error)) throw error;
+      await wait(CAPTURE_RETRY_DELAY_MS);
+      return this.acquire(request, exact);
+    }
+  }
+
+  private async acquire(
+    request: CameraRequest,
+    exact: boolean,
+  ): Promise<{ stream: MediaStream; track: MediaStreamTrack }> {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: videoConstraints(request, exact),
+    });
+    const track = stream.getVideoTracks()[0];
+    if (!track) {
+      stopStream(stream);
+      throw captureFailure("The camera returned no video track.");
+    }
+
+    await wait(TRACK_STARTUP_GRACE_MS);
+    if (track.readyState === "ended") {
+      stopStream(stream);
+      throw captureFailure("The camera video track ended while starting.");
+    }
+    return { stream, track };
   }
 
   private requireTrack(): MediaStreamTrack {

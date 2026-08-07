@@ -29,6 +29,8 @@ export interface NativeUndistortedFrame {
 }
 
 export interface CalibrationWasmModule {
+  getExceptionMessage(error: unknown): readonly string[];
+  decrementExceptionRefcount(error: unknown): void;
   getOpenCvVersion(): string;
   detectFrame(
     rgba: Uint8ClampedArray,

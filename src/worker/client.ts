@@ -29,7 +29,9 @@ export class CalibrationWorkerClient {
     });
     this.worker.addEventListener("message", this.onMessage);
     this.worker.addEventListener("error", (event) => {
-      const error = new Error(event.message || "The calibration worker crashed.");
+      const detail = event.error instanceof Error ? event.error.message : event.message;
+      const error = new Error(detail || "The calibration worker crashed.");
+      console.error("The calibration worker crashed.", event.error ?? event.message);
       this.pending.forEach(({ reject }) => reject(error));
       this.pending.clear();
     });

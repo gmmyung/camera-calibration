@@ -73,13 +73,29 @@ function updated(
 }
 
 function errorText(error: unknown): string {
-  if (error instanceof DOMException && error.name === "NotAllowedError") {
+  const name =
+    typeof error === "object" && error !== null && "name" in error && typeof error.name === "string"
+      ? error.name
+      : "";
+  const message =
+    typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
+      ? error.message
+      : "";
+  if (name === "NotAllowedError") {
     return "Camera permission was denied. You can enable it in the browser's site settings or import images.";
   }
-  if (error instanceof DOMException && error.name === "NotFoundError") {
+  if (name === "NotFoundError") {
     return "No matching camera was found.";
   }
+  if (
+    name === "NotReadableError" ||
+    name === "AbortError" ||
+    /capture failure|could not start (?:the )?video source|starting video failed/i.test(message)
+  ) {
+    return "Camera capture failed. Close other apps using the camera, reconnect it if needed, and try again.";
+  }
   if (error instanceof Error) return error.message;
+  if (message) return message;
   return String(error);
 }
 
@@ -520,11 +536,14 @@ export function App() {
   const [importGroups, setImportGroups] = useState<ImageFileGroup[]>([]);
   const [importBusy, setImportBusy] = useState(false);
   const [solving, setSolving] = useState(false);
+  const [cameraBusy, setCameraBusy] = useState(false);
   const cameraRef = useRef(new CameraController());
   const captureGateRef = useRef(new CaptureGate());
+  const setupVideoRef = useRef<HTMLVideoElement>(null);
   const captureVideoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const captureBusyRef = useRef(false);
+  const cameraBusyRef = useRef(false);
   const saveTimerRef = useRef<number>();
 
   sessionRef.current = session;
@@ -580,6 +599,7 @@ export function App() {
 
   const attachPreview = useCallback(
     (element: HTMLVideoElement | null) => {
+      setupVideoRef.current = element;
       if (element) element.srcObject = stream ?? null;
     },
     [stream],
@@ -602,9 +622,26 @@ export function App() {
     captureGateRef.current.reset();
   }, [removeObservationData]);
 
+  const commitCameraSettings = useCallback(async (settings: CameraSettingsSnapshot) => {
+    const pipelineChanged =
+      sessionRef.current.observations.length > 0 &&
+      cameraPipelineChanged(sessionRef.current.captureSettings, settings);
+    if (pipelineChanged) await clearObservations();
+    setCapabilities(cameraRef.current.capabilities());
+    setSession((previous) =>
+      updated(previous, { captureSettings: settings, imageSize: settings }),
+    );
+    return pipelineChanged;
+  }, [clearObservations]);
+
   const openCamera = useCallback(async (deviceId = selectedDeviceId) => {
+    if (cameraBusyRef.current) return;
+    cameraBusyRef.current = true;
+    setCameraBusy(true);
     setError(undefined);
     setStatus("Requesting camera access…");
+    if (setupVideoRef.current) setupVideoRef.current.srcObject = null;
+    if (captureVideoRef.current) captureVideoRef.current.srcObject = null;
     setStream(undefined);
     setCapabilities(undefined);
     setCurrentDetection(undefined);
@@ -615,11 +652,8 @@ export function App() {
         frameRate: 30,
       });
       const settings = cameraRef.current.settings();
-      if (
-        sessionRef.current.observations.length > 0 &&
-        cameraPipelineChanged(sessionRef.current.captureSettings, settings)
-      ) {
-        await clearObservations();
+      const pipelineChanged = await commitCameraSettings(settings);
+      if (pipelineChanged) {
         setStatus("The stream configuration changed, so previous captures were cleared.");
       } else {
         setStatus(
@@ -629,11 +663,7 @@ export function App() {
         );
       }
       setStream(nextStream);
-      setCapabilities(cameraRef.current.capabilities());
-      setSession((previous) =>
-        updated(previous, { captureSettings: settings, imageSize: settings }),
-      );
-      const availableDevices = await listVideoDevices();
+      const availableDevices = await listVideoDevices().catch(() => []);
       setDevices(availableDevices);
       const active = availableDevices.find(
         (device) =>
@@ -641,18 +671,75 @@ export function App() {
       );
       if (active) setSelectedDeviceId(active.deviceId);
     } catch (cameraError) {
+      cameraRef.current.stop();
+      setStream(undefined);
       setStatus(undefined);
       setError(errorText(cameraError));
+    } finally {
+      cameraBusyRef.current = false;
+      setCameraBusy(false);
     }
-  }, [requestedSize, selectedDeviceId, clearObservations]);
+  }, [requestedSize, selectedDeviceId, commitCameraSettings]);
+
+  const applyCameraSettings = useCallback(async () => {
+    if (!stream) {
+      await openCamera();
+      return;
+    }
+    if (cameraBusyRef.current) return;
+    cameraBusyRef.current = true;
+    setCameraBusy(true);
+    setError(undefined);
+    setStatus("Applying resolution…");
+    try {
+      const settings = await cameraRef.current.applyResolution(requestedSize);
+      const pipelineChanged = await commitCameraSettings(settings);
+      if (pipelineChanged) {
+        setStatus("The stream resolution changed, so previous captures were cleared.");
+      } else {
+        setStatus(
+          settings.width === requestedSize.width && settings.height === requestedSize.height
+            ? `Camera ready at ${settings.width} × ${settings.height}.`
+            : `The browser selected ${settings.width} × ${settings.height} instead of the requested mode.`,
+        );
+      }
+    } catch (cameraError) {
+      setStatus(undefined);
+      setError(errorText(cameraError));
+    } finally {
+      cameraBusyRef.current = false;
+      setCameraBusy(false);
+    }
+  }, [stream, openCamera, requestedSize, commitCameraSettings]);
 
   const selectCamera = useCallback(
     (deviceId: string) => {
+      if (cameraBusyRef.current) return;
       setSelectedDeviceId(deviceId);
       if (stream) void openCamera(deviceId);
     },
     [openCamera, stream],
   );
+
+  useEffect(() => {
+    if (!stream) return;
+    const track = stream.getVideoTracks()[0];
+    if (!track) return;
+    const handleEnded = () => {
+      if (cameraRef.current.currentStream() !== stream) return;
+      cameraRef.current.stop();
+      setStream(undefined);
+      setCapabilities(undefined);
+      setCurrentDetection(undefined);
+      setStatus(undefined);
+      setError(
+        "Camera capture stopped unexpectedly. Close other apps using the camera, reconnect it if needed, and connect again.",
+      );
+    };
+    track.addEventListener("ended", handleEnded);
+    if (track.readyState === "ended") handleEnded();
+    return () => track.removeEventListener("ended", handleEnded);
+  }, [stream]);
 
   const applyZoom = useCallback(async (zoom: number) => {
     try {
@@ -982,14 +1069,14 @@ export function App() {
                 {stream ? <video ref={attachPreview} autoplay muted playsinline /> : <div class="empty-preview"><p>No camera connected</p></div>}
               </div>
               <div class="form-grid">
-                <label class="field span-two"><span>Camera</span><select value={selectedDeviceId} onChange={(event) => selectCamera(event.currentTarget.value)}><option value="">Default camera</option>{devices.map((device, index) => <option value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>)}</select></label>
-                <label class="field span-two"><span>Requested resolution</span><select value={`${requestedSize.width}x${requestedSize.height}`} onChange={(event) => { const [width, height] = event.currentTarget.value.split("x").map(Number); setRequestedSize({ width, height }); }}>{RESOLUTION_PRESETS.map((size) => <option value={`${size.width}x${size.height}`}>{size.label}</option>)}</select></label>
+                <label class="field span-two"><span>Camera</span><select value={selectedDeviceId} disabled={cameraBusy} onChange={(event) => selectCamera(event.currentTarget.value)}><option value="">Default camera</option>{devices.map((device, index) => <option value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>)}</select></label>
+                <label class="field span-two"><span>Requested resolution</span><select value={`${requestedSize.width}x${requestedSize.height}`} disabled={cameraBusy} onChange={(event) => { const [width, height] = event.currentTarget.value.split("x").map(Number); setRequestedSize({ width, height }); }}>{RESOLUTION_PRESETS.map((size) => <option value={`${size.width}x${size.height}`}>{size.label}</option>)}</select></label>
                 <label class="field span-two"><span>Lens model</span><select value={session.lensModel} onChange={(event) => setSession((previous) => updated(previous, { lensModel: event.currentTarget.value as LensModel, result: undefined }))}><option value="pinhole-radtan5">Standard lens · radial/tangential 5</option><option value="fisheye-kb4">Fisheye · four coefficients</option></select></label>
               </div>
-              <div class="button-row"><button type="button" class="button secondary" onClick={() => void openCamera()}>{stream ? "Apply camera settings" : "Connect camera"}</button></div>
+              <div class="button-row"><button type="button" class="button secondary" disabled={cameraBusy} onClick={() => void applyCameraSettings()}>{cameraBusy ? "Working…" : stream ? "Apply resolution" : "Connect camera"}</button></div>
               {session.captureSettings && <dl class="settings-summary"><div><dt>Actual stream</dt><dd>{session.captureSettings.width} × {session.captureSettings.height}</dd></div><div><dt>Frame rate</dt><dd>{session.captureSettings.frameRate?.toFixed(1) ?? "Browser default"}</dd></div><div><dt>Resize mode</dt><dd>{session.captureSettings.resizeMode ?? "Not reported"}</dd></div></dl>}
-              {capabilities?.zoom && <label class="field"><span>Optical/digital zoom: {session.captureSettings?.zoom?.toFixed(1) ?? capabilities.zoom.min.toFixed(1)}×</span><input type="range" min={capabilities.zoom.min} max={capabilities.zoom.max} step={capabilities.zoom.step || 0.1} value={session.captureSettings?.zoom ?? capabilities.zoom.min} onChange={(event) => void applyZoom(Number(event.currentTarget.value))} /></label>}
-              {capabilities?.focusMode && <label class="field"><span>Focus mode</span><select value={session.captureSettings?.focusMode} onChange={(event) => void applyFocusMode(event.currentTarget.value)}>{capabilities.focusMode.map((mode) => <option value={mode}>{mode}</option>)}</select></label>}
+              {capabilities?.zoom && <label class="field"><span>Optical/digital zoom: {session.captureSettings?.zoom?.toFixed(1) ?? capabilities.zoom.min.toFixed(1)}×</span><input type="range" min={capabilities.zoom.min} max={capabilities.zoom.max} step={capabilities.zoom.step || 0.1} value={session.captureSettings?.zoom ?? capabilities.zoom.min} disabled={cameraBusy} onChange={(event) => void applyZoom(Number(event.currentTarget.value))} /></label>}
+              {capabilities?.focusMode && <label class="field"><span>Focus mode</span><select value={session.captureSettings?.focusMode} disabled={cameraBusy} onChange={(event) => void applyFocusMode(event.currentTarget.value)}>{capabilities.focusMode.map((mode) => <option value={mode}>{mode}</option>)}</select></label>}
             </section>
 
             <PatternEditor pattern={session.pattern} onChange={setPattern} />

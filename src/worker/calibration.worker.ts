@@ -2,6 +2,7 @@
 
 import type { DetectionResult } from "../domain/types";
 import type { WorkerRequest, WorkerResponse } from "./protocol";
+import { calibrationErrorMessage } from "./error-message";
 import {
   calibrationResultFromNative,
   loadCalibrationModule,
@@ -11,12 +12,6 @@ import {
 const context = self as DedicatedWorkerGlobalScope;
 const MAX_WORKING_EDGE = 1920;
 let module: CalibrationWasmModule | undefined;
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  return "An unknown calibration error occurred.";
-}
 
 function requireModule(): CalibrationWasmModule {
   if (!module) throw new Error("The OpenCV module is not initialized.");
@@ -171,11 +166,13 @@ context.addEventListener("message", async (event: MessageEvent<WorkerRequest>) =
     }
     context.postMessage(response);
   } catch (error) {
+    const message = calibrationErrorMessage(error, module);
+    console.error(`Calibration worker request ${request.type} failed: ${message}`, error);
     const response: WorkerResponse = {
       id: request.id,
       ok: false,
       type: request.type,
-      error: errorMessage(error),
+      error: message,
     };
     context.postMessage(response);
   }
