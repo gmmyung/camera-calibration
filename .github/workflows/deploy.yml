@@ -49,6 +49,7 @@ jobs:
           path: public/wasm
       - run: npm ci
       - run: npm test
+      - run: npm run test:wasm
       - run: npm run build
       - uses: actions/configure-pages@v5
         if: github.event_name != 'pull_request'

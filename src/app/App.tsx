@@ -998,7 +998,7 @@ export function App() {
             perViewRms: result.perViewErrors[observation.id],
             autoExcludedReason:
               result.excludedViewIds.includes(observation.id) && observation.included
-                ? "Excluded by robust reprojection-error filtering."
+                ? "Excluded because the view was unstable or had high reprojection error."
                 : observation.autoExcludedReason,
           })),
         }),
@@ -1111,7 +1111,7 @@ export function App() {
 
         {session.step === "results" && session.result && (
           <div class="results-layout">
-            <section class="panel result-summary"><div class="result-title"><div><h2>{session.result.model === "pinhole-radtan5" ? "Standard lens" : "Fisheye"}</h2><p class="muted">{session.result.imageSize.width} × {session.result.imageSize.height} · OpenCV {session.result.generator.opencvVersion}</p></div><div class={`score ${session.result.rmsReprojectionError <= (session.result.model === "pinhole-radtan5" ? 0.5 : 0.8) ? "good" : "warn"}`}><strong>{session.result.rmsReprojectionError.toFixed(3)}</strong><span>px RMS</span></div></div><ResultMatrix result={session.result} /><div class="button-row"><button type="button" class="button secondary" onClick={() => downloadText("camera-calibration.json", resultJson(session.result!), "application/json")}>Export JSON</button><button type="button" class="button secondary" onClick={() => downloadText("camera-calibration.yaml", toOpenCvYaml(session.result!), "application/yaml")}>Export YAML</button><button type="button" class="button primary" onClick={() => setStep("review")}>Review views</button></div>{session.result.excludedViewIds.length > 0 && <Status>{session.result.excludedViewIds.length} high-error view(s) excluded.</Status>}</section>
+            <section class="panel result-summary"><div class="result-title"><div><h2>{session.result.model === "pinhole-radtan5" ? "Standard lens" : "Fisheye"}</h2><p class="muted">{session.result.imageSize.width} × {session.result.imageSize.height} · OpenCV {session.result.generator.opencvVersion}</p></div><div class={`score ${session.result.rmsReprojectionError <= (session.result.model === "pinhole-radtan5" ? 0.5 : 0.8) ? "good" : "warn"}`}><strong>{session.result.rmsReprojectionError.toFixed(3)}</strong><span>px RMS</span></div></div><ResultMatrix result={session.result} /><div class="button-row"><button type="button" class="button secondary" onClick={() => downloadText("camera-calibration.json", resultJson(session.result!), "application/json")}>Export JSON</button><button type="button" class="button secondary" onClick={() => downloadText("camera-calibration.yaml", toOpenCvYaml(session.result!), "application/yaml")}>Export YAML</button><button type="button" class="button primary" onClick={() => setStep("review")}>Review views</button></div>{session.result.excludedViewIds.length > 0 && <Status>{session.result.excludedViewIds.length} unstable or high-error view(s) excluded.</Status>}</section>
             <LiveResultPreview stream={stream} result={session.result} worker={worker} />
           </div>
         )}

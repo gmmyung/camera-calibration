@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:wasm": "node scripts/test-wasm-calibration.mjs",
     "test:watch": "vitest",
     "check": "tsc -b && vitest run"
   },

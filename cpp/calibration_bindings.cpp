@@ -445,6 +445,18 @@ double median(std::vector<double> values) {
   return (upper + values[middle - 1]) / 2.0;
 }
 
+int ill_conditioned_fisheye_view(const cv::Exception& error) {
+  static const std::string marker =
+      "CALIB_CHECK_COND - Ill-conditioned matrix for input array ";
+  const std::string details = error.err.empty() ? error.what() : error.err;
+  const std::size_t marker_position = details.find(marker);
+  if (marker_position == std::string::npos) return -1;
+  std::istringstream index_stream(details.substr(marker_position + marker.size()));
+  int index = -1;
+  index_stream >> index;
+  return index_stream.fail() ? -1 : index;
+}
+
 val solve_calibration(const val& input,
                       const std::string& model,
                       int width,
@@ -457,13 +469,30 @@ val solve_calibration(const val& input,
   std::vector<int> excluded;
   SolveState state;
   const double absolute_threshold = model == "pinhole-radtan5" ? 1.5 : 2.0;
+  int reprojection_exclusions = 0;
 
-  for (int iteration = 0; iteration <= 3; ++iteration) {
-    state = solve_subset(observations, active, model, cv::Size(width, height));
+  while (true) {
+    try {
+      state = solve_subset(observations, active, model, cv::Size(width, height));
+    } catch (const cv::Exception& error) {
+      const int local_index = model == "fisheye-kb4" ? ill_conditioned_fisheye_view(error) : -1;
+      if (local_index < 0 || local_index >= static_cast<int>(active.size())) throw;
+      const int observation_index = active[local_index];
+      if (active.size() <= 12) {
+        throw std::runtime_error(
+            "Fisheye calibration is ill-conditioned for view \"" +
+            observations[observation_index].id +
+            "\". Deselect that view or capture more tilted views around the image edges.");
+      }
+      excluded.push_back(observation_index);
+      active.erase(active.begin() + local_index);
+      continue;
+    }
+
     for (std::size_t index = 0; index < active.size(); ++index) {
       all_errors[observations[active[index]].id] = state.errors[index];
     }
-    if (iteration == 3 || active.size() <= 12) break;
+    if (reprojection_exclusions >= 3 || active.size() <= 12) break;
     const double center = median(state.errors);
     std::vector<double> deviations;
     deviations.reserve(state.errors.size());
@@ -474,6 +503,7 @@ val solve_calibration(const val& input,
     const std::size_t local_index = std::distance(state.errors.begin(), worst);
     excluded.push_back(active[local_index]);
     active.erase(active.begin() + local_index);
+    ++reprojection_exclusions;
   }
 
   val result = val::object();
