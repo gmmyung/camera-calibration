@@ -27,6 +27,7 @@ function detection(overrides: Partial<DetectionResult["pose"]> = {}): DetectionR
       centerY: 0.5,
       areaRatio: 0.18,
       planeAngleDegrees: 18,
+      skew: 0.25,
       coverageCell: 4,
       ...overrides,
     },
@@ -35,9 +36,12 @@ function detection(overrides: Partial<DetectionResult["pose"]> = {}): DetectionR
 
 function observation(index: number): FrameObservation {
   const viewDetection = detection({
+    centerX: (index % 5) / 4,
+    centerY: Math.floor(index / 5) / 3,
     coverageCell: index % 9,
     areaRatio: index < 10 ? 0.05 : 0.2,
     planeAngleDegrees: index < 4 ? 20 : 5,
+    skew: index < 4 ? 0.6 : 0.1,
   });
   return {
     id: `view-${index}`,
@@ -91,9 +95,31 @@ describe("captureProgress", () => {
   it("recognizes a geometrically diverse 20-view set", () => {
     const result = captureProgress(Array.from({ length: 20 }, (_, index) => observation(index)));
     expect(result.accepted).toBe(20);
-    expect(result.occupiedCells).toBe(9);
-    expect(result.tiltedViews).toBe(4);
-    expect(result.scaleRatio).toBe(2);
+    expect(result.horizontal).toBe(1);
+    expect(result.vertical).toBe(1);
+    expect(result.size).toBe(1);
+    expect(result.skew).toBe(1);
     expect(result.targetReached).toBe(true);
+  });
+
+  it("does not accept a pile of centered front-facing views as complete coverage", () => {
+    const views = Array.from({ length: 20 }, (_, index) => {
+      const view = observation(index);
+      view.pose = {
+        ...view.pose,
+        centerX: 0.5,
+        centerY: 0.5,
+        areaRatio: 0.08,
+        planeAngleDegrees: 0,
+        skew: 0,
+      };
+      return view;
+    });
+
+    const result = captureProgress(views);
+    expect(result.horizontal).toBe(0);
+    expect(result.vertical).toBe(0);
+    expect(result.skew).toBe(0);
+    expect(result.targetReached).toBe(false);
   });
 });

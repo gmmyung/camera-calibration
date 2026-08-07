@@ -94,6 +94,31 @@ describe("native calibration result validation", () => {
     ).toThrow("invalid reprojection error");
   });
 
+  it("requires a finite full-field projection for fisheye previews", () => {
+    const fisheye = nativeResult({
+      distortion: [-0.1, 0.01, 0, 0],
+      previewCameraMatrix: [500, 0, 640, 0, 500, 360, 0, 0, 1],
+    });
+    const result = calibrationResultFromNative(
+      fisheye,
+      "fisheye-kb4",
+      CHARUCO_PRESET,
+      { width: 1280, height: 720 },
+      observations,
+    );
+    expect(result.previewCameraMatrix).toEqual(fisheye.previewCameraMatrix);
+
+    expect(() =>
+      calibrationResultFromNative(
+        nativeResult({ distortion: [-0.1, 0.01, 0, 0] }),
+        "fisheye-kb4",
+        CHARUCO_PRESET,
+        { width: 1280, height: 720 },
+        observations,
+      ),
+    ).toThrow("invalid fisheye preview matrix");
+  });
+
   it("rejects unknown or duplicate included views and malformed poses", () => {
     expect(() =>
       calibrationResultFromNative(

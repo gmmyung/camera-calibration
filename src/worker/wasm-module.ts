@@ -12,6 +12,7 @@ export interface NativeCalibrationResult {
   error?: string;
   opencvVersion: string;
   cameraMatrix: number[];
+  previewCameraMatrix?: number[];
   distortion: number[];
   rmsReprojectionError: number;
   perViewErrors: Record<string, number>;
@@ -115,6 +116,14 @@ export function calibrationResultFromNative(
   ) {
     throw new Error("OpenCV returned an invalid camera matrix.");
   }
+  if (
+    model === "fisheye-kb4" &&
+    (!finiteArray(native.previewCameraMatrix, 9) ||
+      native.previewCameraMatrix[0]! <= 0 ||
+      native.previewCameraMatrix[4]! <= 0)
+  ) {
+    throw new Error("OpenCV returned an invalid fisheye preview matrix.");
+  }
   const expectedCoefficients = model === "pinhole-radtan5" ? 5 : 4;
   const coefficientCount = native.distortion.length;
   if (!finiteArray(native.distortion, expectedCoefficients)) {
@@ -195,6 +204,10 @@ export function calibrationResultFromNative(
     model,
     imageSize,
     cameraMatrix: native.cameraMatrix as CalibrationResultV1["cameraMatrix"],
+    previewCameraMatrix:
+      model === "fisheye-kb4"
+        ? (native.previewCameraMatrix as CalibrationResultV1["previewCameraMatrix"])
+        : undefined,
     distortion: native.distortion,
     rmsReprojectionError: native.rmsReprojectionError,
     perViewErrors: native.perViewErrors,

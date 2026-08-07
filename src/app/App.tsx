@@ -30,7 +30,6 @@ import {
 } from "../domain/types";
 import {
   CameraController,
-  RESOLUTION_PRESETS,
   listVideoDevices,
   type ExtendedCapabilities,
 } from "../lib/camera";
@@ -58,6 +57,35 @@ import { CalibrationWorkerClient } from "../worker/client";
 const MAX_IMPORT_FILES = 100;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_IMPORT_BYTES = 250 * 1024 * 1024;
+const MAX_CAMERA_DIMENSION = 32_768;
+
+interface ResolutionDraft {
+  width: string;
+  height: string;
+}
+
+function parseResolutionDraft(draft: ResolutionDraft): {
+  size?: ImageSize;
+  error?: string;
+} {
+  const widthText = draft.width.trim();
+  const heightText = draft.height.trim();
+  if (!widthText && !heightText) return {};
+  if (!widthText || !heightText) return { error: "Enter both width and height." };
+  const width = Number(widthText);
+  const height = Number(heightText);
+  if (
+    !Number.isInteger(width) ||
+    !Number.isInteger(height) ||
+    width <= 0 ||
+    height <= 0 ||
+    width > MAX_CAMERA_DIMENSION ||
+    height > MAX_CAMERA_DIMENSION
+  ) {
+    return { error: `Width and height must be whole numbers from 1 to ${MAX_CAMERA_DIMENSION}.` };
+  }
+  return { size: { width, height } };
+}
 
 class SessionOperationCancelledError extends Error {
   constructor() {
@@ -109,6 +137,9 @@ function errorText(error: unknown): string {
   }
   if (name === "NotFoundError") {
     return "No matching camera was found.";
+  }
+  if (name === "OverconstrainedError") {
+    return "The camera does not provide that exact unscaled mode. Try dimensions within the reported range.";
   }
   if (
     name === "NotReadableError" ||
@@ -336,16 +367,23 @@ function PatternEditor({
   );
 }
 
-function CoverageGrid({ observations }: { observations: FrameObservation[] }) {
-  const counts = Array.from({ length: 9 }, (_, cell) =>
-    observations.filter((observation) => observation.included && observation.pose.coverageCell === cell)
-      .length,
-  );
+function CoverageMetrics({
+  progress,
+}: {
+  progress: ReturnType<typeof captureProgress>;
+}) {
+  const metrics = [
+    ["Horizontal", progress.horizontal],
+    ["Vertical", progress.vertical],
+    ["Size", progress.size],
+    ["Skew", progress.skew],
+  ] as const;
   return (
-    <div class="coverage" aria-label="Image coverage map">
-      {counts.map((count, cell) => (
-        <div key={cell} class={count ? "covered" : ""} title={`Cell ${cell + 1}: ${count} views`}>
-          {count || "·"}
+    <div class="coverage-metrics" aria-label="Calibration view coverage">
+      {metrics.map(([label, value]) => (
+        <div class="coverage-metric" key={label}>
+          <div><span>{label}</span><strong>{Math.round(value * 100)}%</strong></div>
+          <progress max={1} value={value} aria-label={`${label} coverage`} />
         </div>
       ))}
     </div>
@@ -578,7 +616,10 @@ export function App() {
   const [stream, setStream] = useState<MediaStream>();
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState("");
-  const [requestedSize, setRequestedSize] = useState<ImageSize>({ width: 1280, height: 720 });
+  const [resolutionDraft, setResolutionDraft] = useState<ResolutionDraft>({
+    width: "",
+    height: "",
+  });
   const [capabilities, setCapabilities] = useState<ExtendedCapabilities>();
   const [status, setStatus] = useState<string>();
   const [error, setError] = useState<string>();
@@ -606,6 +647,10 @@ export function App() {
   currentDetectionRef.current = currentDetection;
   const progress = useMemo(() => captureProgress(session.observations), [session.observations]);
   const patternErrors = useMemo(() => validatePattern(session.pattern), [session.pattern]);
+  const requestedResolution = useMemo(
+    () => parseResolutionDraft(resolutionDraft),
+    [resolutionDraft],
+  );
 
   useEffect(() => {
     const client = new CalibrationWorkerClient();
@@ -739,6 +784,10 @@ export function App() {
       cameraPipelineChanged(sessionRef.current.captureSettings, settings);
     if (pipelineChanged) await clearObservations();
     setCapabilities(cameraRef.current.capabilities());
+    setResolutionDraft({
+      width: String(settings.width),
+      height: String(settings.height),
+    });
     setSession((previous) =>
       updated(previous, { captureSettings: settings, imageSize: settings }),
     );
@@ -747,6 +796,10 @@ export function App() {
 
   const openCamera = useCallback(async (deviceId = selectedDeviceId) => {
     if (cameraBusyRef.current) return;
+    if (requestedResolution.error) {
+      setError(requestedResolution.error);
+      return;
+    }
     cameraBusyRef.current = true;
     setCameraBusy(true);
     setError(undefined);
@@ -762,20 +815,15 @@ export function App() {
     captureGateRef.current.reset();
     try {
       const nextStream = await cameraRef.current.open({
-        ...requestedSize,
+        ...requestedResolution.size,
         deviceId: deviceId || undefined,
-        frameRate: 30,
       });
       const settings = cameraRef.current.settings();
       const pipelineChanged = await commitCameraSettings(settings);
       if (pipelineChanged) {
         setStatus("The stream configuration changed, so previous captures were cleared.");
       } else {
-        setStatus(
-          settings.width === requestedSize.width && settings.height === requestedSize.height
-            ? `Camera ready at ${settings.width} × ${settings.height}.`
-            : `The browser selected ${settings.width} × ${settings.height} instead of the requested mode.`,
-        );
+        setStatus(`Camera ready at ${settings.width} × ${settings.height}.`);
       }
       setStream(nextStream);
       try {
@@ -799,29 +847,29 @@ export function App() {
       cameraBusyRef.current = false;
       setCameraBusy(false);
     }
-  }, [requestedSize, selectedDeviceId, commitCameraSettings]);
+  }, [requestedResolution, selectedDeviceId, commitCameraSettings]);
 
   const applyCameraSettings = useCallback(async () => {
     if (!stream) {
       await openCamera();
       return;
     }
+    if (requestedResolution.error || !requestedResolution.size) {
+      setError(requestedResolution.error ?? "Enter the exact width and height to apply.");
+      return;
+    }
     if (cameraBusyRef.current) return;
     cameraBusyRef.current = true;
     setCameraBusy(true);
     setError(undefined);
-    setStatus("Applying resolution…");
+    setStatus("Applying exact camera mode…");
     try {
-      const settings = await cameraRef.current.applyResolution(requestedSize);
+      const settings = await cameraRef.current.applyResolution(requestedResolution.size);
       const pipelineChanged = await commitCameraSettings(settings);
       if (pipelineChanged) {
         setStatus("The stream resolution changed, so previous captures were cleared.");
       } else {
-        setStatus(
-          settings.width === requestedSize.width && settings.height === requestedSize.height
-            ? `Camera ready at ${settings.width} × ${settings.height}.`
-            : `The browser selected ${settings.width} × ${settings.height} instead of the requested mode.`,
-        );
+        setStatus(`Camera ready at ${settings.width} × ${settings.height}.`);
       }
     } catch (cameraError) {
       if (!isOperationCancellation(cameraError)) {
@@ -832,7 +880,7 @@ export function App() {
       cameraBusyRef.current = false;
       setCameraBusy(false);
     }
-  }, [stream, openCamera, requestedSize, commitCameraSettings]);
+  }, [stream, openCamera, requestedResolution, commitCameraSettings]);
 
   const selectCamera = useCallback(
     (deviceId: string) => {
@@ -1333,12 +1381,17 @@ export function App() {
               <div class="camera-preview compact">
                 {stream ? <video ref={attachPreview} autoplay muted playsinline /> : <div class="empty-preview"><p>No camera connected</p></div>}
               </div>
-              <div class="form-grid">
-                <label class="field span-two"><span>Camera</span><select value={selectedDeviceId} disabled={cameraBusy} onChange={(event) => selectCamera(event.currentTarget.value)}><option value="">Default camera</option>{devices.map((device, index) => <option key={`${device.deviceId}-${index}`} value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>)}</select></label>
-                <label class="field span-two"><span>Requested resolution</span><select value={`${requestedSize.width}x${requestedSize.height}`} disabled={cameraBusy} onChange={(event) => { const selected = RESOLUTION_PRESETS.find((size) => `${size.width}x${size.height}` === event.currentTarget.value); if (selected) setRequestedSize({ width: selected.width, height: selected.height }); }}>{RESOLUTION_PRESETS.map((size) => <option key={`${size.width}x${size.height}`} value={`${size.width}x${size.height}`}>{size.label}</option>)}</select></label>
-                <label class="field span-two"><span>Lens model</span><select value={session.lensModel} onChange={(event) => { const lensModel = event.currentTarget.value as LensModel; setSession((previous) => updated(previous, { lensModel, result: undefined })); }}><option value="pinhole-radtan5">Standard lens · radial/tangential 5</option><option value="fisheye-kb4">Fisheye · four coefficients</option></select></label>
-              </div>
-              <div class="button-row"><button type="button" class="button secondary" disabled={cameraBusy} onClick={() => void applyCameraSettings()}>{cameraBusy ? "Working…" : stream ? "Apply resolution" : "Connect camera"}</button></div>
+              <form class="camera-form" onSubmit={(event) => { event.preventDefault(); void applyCameraSettings(); }}>
+                <div class="form-grid">
+                  <label class="field span-two"><span>Camera</span><select value={selectedDeviceId} disabled={cameraBusy} onChange={(event) => selectCamera(event.currentTarget.value)}><option value="">Default camera</option>{devices.map((device, index) => <option key={`${device.deviceId}-${index}`} value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>)}</select></label>
+                  <label class="field"><span>Width</span><input type="number" inputMode="numeric" min={capabilities?.width?.min ?? 1} max={capabilities?.width?.max ?? MAX_CAMERA_DIMENSION} step={1} placeholder="Camera default" value={resolutionDraft.width} disabled={cameraBusy} onInput={(event) => setResolutionDraft((previous) => ({ ...previous, width: event.currentTarget.value }))} /></label>
+                  <label class="field"><span>Height</span><input type="number" inputMode="numeric" min={capabilities?.height?.min ?? 1} max={capabilities?.height?.max ?? MAX_CAMERA_DIMENSION} step={1} placeholder="Camera default" value={resolutionDraft.height} disabled={cameraBusy} onInput={(event) => setResolutionDraft((previous) => ({ ...previous, height: event.currentTarget.value }))} /></label>
+                  {capabilities?.width && capabilities.height && <p class="resolution-bounds span-two">Reported bounds: width {capabilities.width.min}–{capabilities.width.max}; height {capabilities.height.min}–{capabilities.height.max}</p>}
+                  {requestedResolution.error && <p class="field-error span-two">{requestedResolution.error}</p>}
+                  <label class="field span-two"><span>Lens model</span><select value={session.lensModel} onChange={(event) => { const lensModel = event.currentTarget.value as LensModel; setSession((previous) => updated(previous, { lensModel, result: undefined })); }}><option value="pinhole-radtan5">Standard lens · radial/tangential 5</option><option value="fisheye-kb4">Fisheye · four coefficients</option></select></label>
+                </div>
+                <div class="button-row form-submit"><button type="submit" class="button primary" disabled={cameraBusy || Boolean(requestedResolution.error) || Boolean(stream && !requestedResolution.size)}>{cameraBusy ? "Working…" : stream ? "Apply exact mode" : "Connect camera"}</button></div>
+              </form>
               {session.captureSettings && <dl class="settings-summary"><div><dt>Actual stream</dt><dd>{session.captureSettings.width} × {session.captureSettings.height}</dd></div><div><dt>Frame rate</dt><dd>{session.captureSettings.frameRate?.toFixed(1) ?? "Browser default"}</dd></div><div><dt>Resize mode</dt><dd>{session.captureSettings.resizeMode ?? "Not reported"}</dd></div></dl>}
               {capabilities?.zoom && <label class="field"><span>Optical/digital zoom: {session.captureSettings?.zoom?.toFixed(1) ?? capabilities.zoom.min.toFixed(1)}×</span><input type="range" min={capabilities.zoom.min} max={capabilities.zoom.max} step={capabilities.zoom.step || 0.1} value={session.captureSettings?.zoom ?? capabilities.zoom.min} disabled={cameraBusy} onChange={(event) => void applyZoom(Number(event.currentTarget.value))} /></label>}
               {capabilities?.focusMode && <label class="field"><span>Focus mode</span><select value={session.captureSettings?.focusMode} disabled={cameraBusy} onChange={(event) => void applyFocusMode(event.currentTarget.value)}>{capabilities.focusMode.map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select></label>}
@@ -1347,7 +1400,7 @@ export function App() {
             <PatternEditor pattern={session.pattern} onChange={setPattern} />
 
             <section class="panel setup-actions">
-              <div><h2>Target file</h2><p class="muted">Print at 100%. Verify the 100 mm ruler.</p></div>
+              <div><h2>Calibration board</h2></div>
               {patternErrors.map((message) => <Status key={message} tone="error">{message}</Status>)}
               <div class="button-row"><button type="button" class="button secondary" disabled={workerStatus !== "ready" || patternErrors.length > 0} onClick={() => void downloadPattern()}>Download board SVG</button><button type="button" class="button primary" disabled={workerStatus !== "ready" || patternErrors.length > 0} onClick={() => setStep("capture")}>Start capture</button></div>
             </section>
@@ -1363,13 +1416,13 @@ export function App() {
               <div class="button-row"><button type="button" class="button secondary" disabled={importBusy || !captureDecision?.basicValid || !stream || progress.accepted >= 30} onClick={() => void captureCurrentFrame()}>Capture now</button><label class={`button secondary file-button${importBusy ? " disabled" : ""}`}>Import images<input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={importBusy} onChange={(event) => { const input = event.currentTarget; const files = Array.from(input.files ?? []); input.value = ""; void chooseImportFiles(files); }} /></label><button type="button" class="button secondary" disabled={importBusy} onClick={() => setStep("setup")}>Camera settings</button><button type="button" class="button primary" disabled={importBusy || !progress.minimumReached} onClick={() => setStep("review")}>Review {progress.accepted} views</button></div>
               {importGroups.length > 0 && <div class="import-groups"><h3>Choose one resolution</h3>{importGroups.map((group) => <button key={group.key} type="button" disabled={importBusy} onClick={() => void processImportGroup(group)}><strong>{group.width} × {group.height}</strong><span>{group.files.length} images</span></button>)}</div>}
             </section>
-            <aside class="panel capture-guide"><h2>Coverage</h2><CoverageGrid observations={session.observations} /><dl class="progress-list"><div><dt>Views</dt><dd>{progress.accepted} / 20</dd></div><div><dt>Cells</dt><dd>{progress.occupiedCells} / 6</dd></div><div><dt>Tilted</dt><dd>{progress.tiltedViews} / 4</dd></div><div><dt>Scale</dt><dd>{progress.scaleRatio.toFixed(1)}× / 1.8×</dd></div></dl><p class="capture-hint">Cover edges and corners. Vary distance and tilt.</p>{progress.targetReached && <Status tone="success">Coverage target reached.</Status>}</aside>
+            <aside class="panel capture-guide"><h2>Coverage</h2><CoverageMetrics progress={progress} /><dl class="progress-list"><div><dt>Views</dt><dd>{progress.accepted} / 20</dd></div></dl><p class="capture-hint">Move the board across the frame. Vary size and perspective.</p>{progress.targetReached && <Status tone="success">Coverage target reached.</Status>}</aside>
           </div>
         )}
 
         {session.step === "review" && (
           <div class="review-layout">
-            <section class="panel review-summary"><div><h2>Views ({progress.accepted} included)</h2><p class="muted">Toggle views before calibration.</p></div><CoverageGrid observations={session.observations} /><div class="button-row"><button type="button" class="button secondary" disabled={solving} onClick={() => setStep("capture")}>Add views</button><button type="button" class="button primary" disabled={!progress.minimumReached || solving} onClick={() => void solveCalibration()}>{solving ? "Solving…" : "Run calibration"}</button></div></section>
+            <section class="panel review-summary"><div><h2>Views ({progress.accepted} included)</h2><p class="muted">Toggle views before calibration.</p></div><CoverageMetrics progress={progress} /><div class="button-row"><button type="button" class="button secondary" disabled={solving} onClick={() => setStep("capture")}>Add views</button><button type="button" class="button primary" disabled={!progress.minimumReached || solving} onClick={() => void solveCalibration()}>{solving ? "Solving…" : "Run calibration"}</button></div></section>
             <section class="observation-grid" aria-label="Captured calibration views">
               {session.observations.map((observation, index) => (
                 <article key={observation.id} class={`observation-card ${observation.included ? "" : "excluded"}`}>

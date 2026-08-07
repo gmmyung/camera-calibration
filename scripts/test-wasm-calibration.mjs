@@ -117,6 +117,21 @@ assert.deepEqual(result.excludedViewIds, [illConditionedView.id]);
 assert.equal(Object.hasOwn(result.perViewErrors, illConditionedView.id), false);
 assert.equal(Number.isFinite(result.rmsReprojectionError), true);
 assert.ok(result.rmsReprojectionError < 0.01);
+assert.equal(result.previewCameraMatrix.length, 9);
+assert.equal(result.previewCameraMatrix.every(Number.isFinite), true);
+assert.ok(result.previewCameraMatrix[0] > 0);
+assert.ok(result.previewCameraMatrix[4] > 0);
+
+const preview = module.undistortFrame(new Uint8Array(width * height * 4), width, height, {
+  model: "fisheye-kb4",
+  imageSize: { width, height },
+  cameraMatrix: result.cameraMatrix,
+  distortion: result.distortion,
+});
+assert.equal(preview.ok, true);
+assert.equal(preview.width, width);
+assert.equal(preview.height, height);
+assert.equal(preview.rgba.byteLength, width * height * 4);
 
 const duplicateIds = validViews.slice(0, 12).map((view) => ({ ...view, id: "duplicate" }));
 assert.match(

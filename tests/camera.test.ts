@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CameraController } from "../src/lib/camera";
 
-function fakeTrack(options: { capabilities?: MediaTrackCapabilities } = {}) {
+function fakeTrack(
+  options: {
+    capabilities?: MediaTrackCapabilities;
+    settings?: Partial<MediaTrackSettings & { resizeMode: string }>;
+  } = {},
+) {
   const track = {
     label: "Test camera",
     readyState: "live",
@@ -13,6 +18,7 @@ function fakeTrack(options: { capabilities?: MediaTrackCapabilities } = {}) {
       deviceId: "camera-1",
       frameRate: 30,
       resizeMode: "none",
+      ...options.settings,
     })),
     ...(options.capabilities
       ? { getCapabilities: vi.fn(() => options.capabilities) }
@@ -31,7 +37,11 @@ function fakeStream(track: ReturnType<typeof fakeTrack>): MediaStream {
 describe("CameraController", () => {
   beforeEach(() => {
     Object.defineProperty(navigator, "mediaDevices", {
-      value: { getUserMedia: vi.fn(), enumerateDevices: vi.fn() },
+      value: {
+        getUserMedia: vi.fn(),
+        enumerateDevices: vi.fn(),
+        getSupportedConstraints: vi.fn(() => ({ resizeMode: true })),
+      },
       configurable: true,
     });
   });
@@ -40,48 +50,73 @@ describe("CameraController", () => {
     vi.useRealTimers();
   });
 
-  it("requests exact dimensions, then falls back to ideal dimensions", async () => {
-    const track = fakeTrack({ capabilities: { width: { min: 320, max: 1920 } } });
-    const getUserMedia = vi
-      .fn()
-      .mockRejectedValueOnce({ name: "OverconstrainedError" })
-      .mockResolvedValueOnce(fakeStream(track));
+  it("requests exact dimensions without browser cropping or scaling", async () => {
+    const track = fakeTrack({
+      capabilities: { width: { min: 320, max: 1920 } },
+      settings: { width: 1920, height: 1080 },
+    });
+    const getUserMedia = vi.fn().mockResolvedValueOnce(fakeStream(track));
     Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: getUserMedia });
 
     const controller = new CameraController();
     await controller.open({ width: 1920, height: 1080, deviceId: "camera-1" });
 
     const exact = getUserMedia.mock.calls[0]![0].video;
-    const fallback = getUserMedia.mock.calls[1]![0].video;
     expect(exact.width).toEqual({ exact: 1920 });
     expect(exact.height).toEqual({ exact: 1080 });
-    expect(exact.resizeMode).toEqual({ ideal: "none" });
-    expect(fallback.width).toEqual({ ideal: 1920 });
-    expect(fallback.height).toEqual({ ideal: 1080 });
+    expect(exact.resizeMode).toEqual({ exact: "none" });
+    expect(getUserMedia).toHaveBeenCalledOnce();
     expect(controller.settings()).toMatchObject({
-      width: 1280,
-      height: 720,
+      width: 1920,
+      height: 1080,
       deviceId: "camera-1",
       cameraLabel: "Test camera",
     });
     expect(controller.capabilities()?.width?.max).toBe(1920);
   });
 
-  it("falls back when applying an unsupported exact resolution", async () => {
+  it("does not fall back when an exact resolution is unsupported", async () => {
     const track = fakeTrack();
     const getUserMedia = vi.fn().mockResolvedValue(fakeStream(track));
     Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: getUserMedia });
     const controller = new CameraController();
     await controller.open({ width: 1280, height: 720 });
-    track.applyConstraints
-      .mockRejectedValueOnce(new DOMException("unsupported", "OverconstrainedError"))
-      .mockResolvedValueOnce(undefined);
+    track.applyConstraints.mockRejectedValueOnce(
+      new DOMException("unsupported", "OverconstrainedError"),
+    );
 
-    await controller.applyResolution({ width: 3840, height: 2160 });
+    await expect(controller.applyResolution({ width: 3840, height: 2160 })).rejects.toThrow(
+      "unsupported",
+    );
 
     expect(track.applyConstraints.mock.calls[0]![0].width).toEqual({ exact: 3840 });
-    expect(track.applyConstraints.mock.calls[1]![0].width).toEqual({ ideal: 3840 });
+    expect(track.applyConstraints.mock.calls[0]![0].resizeMode).toEqual({ exact: "none" });
+    expect(track.applyConstraints).toHaveBeenCalledOnce();
     expect(controller.capabilities()).toBeUndefined();
+  });
+
+  it("lets the camera choose its native default when dimensions are omitted", async () => {
+    const track = fakeTrack();
+    const getUserMedia = vi.fn().mockResolvedValue(fakeStream(track));
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: getUserMedia });
+
+    await new CameraController().open({ deviceId: "camera-1" });
+
+    const constraints = getUserMedia.mock.calls[0]![0].video;
+    expect(constraints.width).toBeUndefined();
+    expect(constraints.height).toBeUndefined();
+    expect(constraints.resizeMode).toEqual({ exact: "none" });
+  });
+
+  it("rejects browsers that cannot guarantee an unscaled stream", async () => {
+    const getUserMedia = vi.fn();
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: getUserMedia });
+    Object.defineProperty(navigator.mediaDevices, "getSupportedConstraints", {
+      value: vi.fn(() => ({ resizeMode: false })),
+    });
+
+    await expect(new CameraController().open({})).rejects.toThrow("resizeMode is unsupported");
+    expect(getUserMedia).not.toHaveBeenCalled();
   });
 
   it("retries a transient camera capture failure once", async () => {
@@ -107,7 +142,7 @@ describe("CameraController", () => {
   it("stops the previous track before opening another camera", async () => {
     vi.useFakeTimers();
     const firstTrack = fakeTrack();
-    const secondTrack = fakeTrack();
+    const secondTrack = fakeTrack({ settings: { width: 1920, height: 1080 } });
     const getUserMedia = vi
       .fn()
       .mockResolvedValueOnce(fakeStream(firstTrack))

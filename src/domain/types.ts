@@ -72,6 +72,7 @@ export interface DetectionPoseFeatures {
   centerY: number;
   areaRatio: number;
   planeAngleDegrees: number;
+  skew?: number;
   coverageCell: number;
 }
 
@@ -130,6 +131,7 @@ export interface CalibrationResultV1 {
   model: LensModel;
   imageSize: ImageSize;
   cameraMatrix: [number, number, number, number, number, number, number, number, number];
+  previewCameraMatrix?: [number, number, number, number, number, number, number, number, number];
   distortion: number[];
   rmsReprojectionError: number;
   perViewErrors: Record<string, number>;
@@ -158,7 +160,8 @@ export interface CaptureProgress {
   accepted: number;
   minimumReached: boolean;
   targetReached: boolean;
-  occupiedCells: number;
-  tiltedViews: number;
-  scaleRatio: number;
+  horizontal: number;
+  vertical: number;
+  size: number;
+  skew: number;
 }

@@ -121,6 +121,8 @@ function isPoseFeatures(value: unknown): value is DetectionPoseFeatures {
     isFiniteNumber(value.centerY) &&
     isNonNegativeNumber(value.areaRatio) &&
     isNonNegativeNumber(value.planeAngleDegrees) &&
+    (value.skew === undefined ||
+      (isNonNegativeNumber(value.skew) && value.skew <= 1)) &&
     Number.isInteger(value.coverageCell) &&
     (value.coverageCell as number) >= 0 &&
     (value.coverageCell as number) <= 8
@@ -204,6 +206,10 @@ function isCalibrationResult(
     value.cameraMatrix[0] <= 0 ||
     !isFiniteNumber(value.cameraMatrix[4]) ||
     value.cameraMatrix[4] <= 0 ||
+    (value.previewCameraMatrix !== undefined &&
+      (!isNumberArray(value.previewCameraMatrix, 9) ||
+        value.previewCameraMatrix[0]! <= 0 ||
+        value.previewCameraMatrix[4]! <= 0)) ||
     !isNumberArray(value.distortion, expectedDistortion) ||
     !isNonNegativeNumber(value.rmsReprojectionError) ||
     !isRecord(value.perViewErrors) ||

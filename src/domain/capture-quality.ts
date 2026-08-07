@@ -9,6 +9,11 @@ import type {
 const MIN_STABLE_MS = 400;
 const CAPTURE_COOLDOWN_MS = 800;
 const MAX_NORMALIZED_MOTION = 0.003;
+const NOVELTY_DISTANCE = 0.2;
+const HORIZONTAL_RANGE_TARGET = 0.7;
+const VERTICAL_RANGE_TARGET = 0.7;
+const SIZE_TARGET = 0.4;
+const SKEW_TARGET = 0.5;
 
 export interface CaptureDecision {
   accept: boolean;
@@ -50,15 +55,45 @@ export function isUsableDetection(detection: DetectionResult): boolean {
     Array.isArray(detection.quality.messages) &&
     detection.quality.messages.every((message) => typeof message === "string") &&
     Number.isFinite(detection.pose.centerX) &&
+    detection.pose.centerX >= 0 &&
+    detection.pose.centerX <= 1 &&
     Number.isFinite(detection.pose.centerY) &&
+    detection.pose.centerY >= 0 &&
+    detection.pose.centerY <= 1 &&
     Number.isFinite(detection.pose.areaRatio) &&
     detection.pose.areaRatio >= 0 &&
     Number.isFinite(detection.pose.planeAngleDegrees) &&
     detection.pose.planeAngleDegrees >= 0 &&
+    (detection.pose.skew === undefined ||
+      (Number.isFinite(detection.pose.skew) &&
+        detection.pose.skew >= 0 &&
+        detection.pose.skew <= 1)) &&
     Number.isInteger(detection.pose.coverageCell) &&
     detection.pose.coverageCell >= 0 &&
     detection.pose.coverageCell <= 8
   );
+}
+
+interface ViewParameters {
+  x: number;
+  y: number;
+  size: number;
+  skew: number;
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+function viewParameters(view: DetectionResult | FrameObservation): ViewParameters {
+  return {
+    x: clamp01(view.pose.centerX),
+    y: clamp01(view.pose.centerY),
+    size: clamp01(Math.sqrt(Math.max(0, view.pose.areaRatio))),
+    skew: clamp01(
+      view.pose.skew ?? (view.pose.planeAngleDegrees * Math.PI) / 90,
+    ),
+  };
 }
 
 function matchingMotion(
@@ -93,21 +128,15 @@ function matchingMotion(
 function isNovel(detection: DetectionResult, observations: FrameObservation[]): boolean {
   const included = observations.filter((observation) => observation.included);
   if (included.length === 0) return true;
-  const fillsNewCell = !included.some(
-    (candidate) => candidate.pose.coverageCell === detection.pose.coverageCell,
-  );
+  const candidate = viewParameters(detection);
   return included.every((observation) => {
-    const centerDistance = Math.hypot(
-      detection.pose.centerX - observation.pose.centerX,
-      detection.pose.centerY - observation.pose.centerY,
-    );
-    const areaChange =
-      Math.abs(detection.pose.areaRatio - observation.pose.areaRatio) /
-      Math.max(observation.pose.areaRatio, 0.001);
-    const angleChange = Math.abs(
-      detection.pose.planeAngleDegrees - observation.pose.planeAngleDegrees,
-    );
-    return centerDistance >= 0.12 || areaChange >= 0.2 || angleChange >= 10 || fillsNewCell;
+    const previous = viewParameters(observation);
+    const distance =
+      Math.abs(candidate.x - previous.x) +
+      Math.abs(candidate.y - previous.y) +
+      Math.abs(candidate.size - previous.size) +
+      Math.abs(candidate.skew - previous.skew);
+    return distance > NOVELTY_DISTANCE;
   });
 }
 
@@ -176,23 +205,26 @@ export class CaptureGate {
 
 export function captureProgress(observations: FrameObservation[]): CaptureProgress {
   const included = observations.filter((observation) => observation.included);
-  const occupiedCells = new Set(included.map((observation) => observation.pose.coverageCell)).size;
-  const tiltedViews = included.filter(
-    (observation) => observation.pose.planeAngleDegrees >= 15,
-  ).length;
-  const areas = included
-    .map((observation) => observation.pose.areaRatio)
-    .filter((area) => Number.isFinite(area) && area > 0);
-  const scaleRatio =
-    areas.length > 1 ? Math.sqrt(Math.max(...areas) / Math.min(...areas)) : 1;
+  const parameters = included.map(viewParameters);
+  const xs = parameters.map(({ x }) => x);
+  const ys = parameters.map(({ y }) => y);
+  const sizes = parameters.map(({ size }) => size);
+  const skews = parameters.map(({ skew }) => skew);
+  const range = (values: number[]): number =>
+    values.length > 0 ? Math.max(...values) - Math.min(...values) : 0;
+  const horizontal = clamp01(range(xs) / HORIZONTAL_RANGE_TARGET);
+  const vertical = clamp01(range(ys) / VERTICAL_RANGE_TARGET);
+  const size = clamp01((sizes.length > 0 ? Math.max(...sizes) : 0) / SIZE_TARGET);
+  const skew = clamp01((skews.length > 0 ? Math.max(...skews) : 0) / SKEW_TARGET);
   const targetReached =
-    included.length >= 20 && occupiedCells >= 6 && tiltedViews >= 4 && scaleRatio >= 1.8;
+    included.length >= 20 && horizontal === 1 && vertical === 1 && size === 1 && skew === 1;
   return {
     accepted: included.length,
     minimumReached: included.length >= 12,
     targetReached,
-    occupiedCells,
-    tiltedViews,
-    scaleRatio,
+    horizontal,
+    vertical,
+    size,
+    skew,
   };
 }

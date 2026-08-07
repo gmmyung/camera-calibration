@@ -6,7 +6,7 @@ There is no runtime server. Camera frames, imported images, observations, and re
 
 ## Features
 
-- Guided live capture with sharpness, stability, novelty, tilt, scale, and 3×3 coverage feedback
+- Guided live capture with sharpness, stability, and X/Y/size/skew coverage feedback
 - JPEG, PNG, and WebP import grouped by exact resolution
 - Standard five-coefficient radial/tangential and four-coefficient fisheye models
 - ChArUco and chessboard presets plus custom board definitions
@@ -37,7 +37,7 @@ npm run dev
 
 The camera API requires HTTPS or `localhost`. If `public/wasm/calibration.js` and `calibration.wasm` have not been built, the UI loads but reports that the calibration engine is unavailable.
 
-The resolution selector first requests exact width and height constraints, then retries them as preferences when a camera or browser cannot provide that mode. **Actual stream** shows the dimensions returned by `MediaStreamTrack.getSettings()` and is the value used for calibration. Changing the camera, actual resolution, zoom, focus mode, or resize mode clears incompatible captures.
+The first connection leaves dimensions unset unless the user enters them, allowing the camera to choose its default native mode. Once connected, the width and height fields show the active mode and the track's reported bounds. Entered dimensions are required exactly; Lensbench does not fall back to browser-selected dimensions. Every camera request also requires `resizeMode: { exact: "none" }`, so browsers that cannot guarantee an uncropped, unscaled stream are rejected. **Actual stream** shows the settings used for calibration. Changing the camera, resolution, zoom, focus mode, or resize mode clears incompatible captures.
 
 ## Verification
 
@@ -47,7 +47,7 @@ npm run test:wasm
 npm run build
 ```
 
-The WebAssembly build is intentionally single-threaded. This keeps the application compatible with ordinary GitHub Pages hosting without requiring cross-origin isolation headers. Detection runs in a dedicated module worker, and frames are downscaled to a maximum 1920-pixel working edge. The corrected live preview runs in WebGL2 at the camera frame cadence, with the OpenCV worker retained as a fallback.
+The WebAssembly build is intentionally single-threaded. This keeps the application compatible with ordinary GitHub Pages hosting without requiring cross-origin isolation headers. Detection runs in a dedicated module worker, and frames are downscaled to a maximum 1920-pixel working edge. The corrected live preview runs in WebGL2 at the camera frame cadence, with the OpenCV worker retained as a fallback. Fisheye previews use OpenCV's full-field (`balance = 1`) projection matrix.
 
 ## GitHub Pages
 

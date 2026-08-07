@@ -1,6 +1,8 @@
 import type { CameraSettingsSnapshot, ImageSize } from "../domain/types";
 
-export interface CameraRequest extends ImageSize {
+export interface CameraRequest {
+  width?: number;
+  height?: number;
   deviceId?: string;
   frameRate?: number;
 }
@@ -26,21 +28,23 @@ interface ExtendedConstraints extends MediaTrackConstraints {
   advanced?: ExtendedConstraintSet[];
 }
 
+interface ExtendedSupportedConstraints extends MediaTrackSupportedConstraints {
+  resizeMode?: boolean;
+}
+
 type ExtendedSettings = MediaTrackSettings & {
   zoom?: number;
   focusMode?: string;
   resizeMode?: string;
 };
 
-function videoConstraints(request: CameraRequest, exact: boolean): ExtendedConstraints {
-  const dimension = (value: number): ConstrainULong =>
-    exact ? { exact: value } : { ideal: value };
+function videoConstraints(request: CameraRequest): ExtendedConstraints {
   return {
     deviceId: request.deviceId ? { exact: request.deviceId } : undefined,
-    width: dimension(request.width),
-    height: dimension(request.height),
+    width: request.width === undefined ? undefined : { exact: request.width },
+    height: request.height === undefined ? undefined : { exact: request.height },
     frameRate: request.frameRate ? { ideal: request.frameRate } : undefined,
-    resizeMode: { ideal: "none" },
+    resizeMode: { exact: "none" },
   };
 }
 
@@ -58,20 +62,18 @@ function validateImageSize(size: ImageSize): void {
 }
 
 function validateRequest(request: CameraRequest): void {
-  validateImageSize(request);
+  if ((request.width === undefined) !== (request.height === undefined)) {
+    throw new Error("Camera width and height must be provided together.");
+  }
+  if (request.width !== undefined && request.height !== undefined) {
+    validateImageSize({ width: request.width, height: request.height });
+  }
   if (
     request.frameRate !== undefined &&
     (!Number.isFinite(request.frameRate) || request.frameRate <= 0 || request.frameRate > 240)
   ) {
     throw new Error("Camera frame rate must be between 0 and 240 fps.");
   }
-}
-
-function isOverconstrained(error: unknown): boolean {
-  return (
-    (error instanceof DOMException && error.name === "OverconstrainedError") ||
-    (typeof error === "object" && error !== null && "name" in error && error.name === "OverconstrainedError")
-  );
 }
 
 const CAMERA_RELEASE_DELAY_MS = 300;
@@ -126,18 +128,13 @@ export class CameraController {
     }
 
     validateRequest(request);
+    this.requireUnscaledCaptureSupport();
     const operationId = ++this.operationId;
     const releasedActiveStream = this.releaseActiveStream();
     if (releasedActiveStream) await wait(CAMERA_RELEASE_DELAY_MS);
     this.assertCurrent(operationId);
 
-    let capture: { stream: MediaStream; track: MediaStreamTrack };
-    try {
-      capture = await this.acquireWithRetry(request, true, operationId);
-    } catch (error) {
-      if (!isOverconstrained(error)) throw error;
-      capture = await this.acquireWithRetry(request, false, operationId);
-    }
+    const capture = await this.acquireWithRetry(request, operationId);
 
     this.assertCurrent(operationId, capture.stream);
     this.stream = capture.stream;
@@ -147,43 +144,52 @@ export class CameraController {
 
   async applyResolution(size: ImageSize): Promise<CameraSettingsSnapshot> {
     validateImageSize(size);
+    this.requireUnscaledCaptureSupport();
     const track = this.requireTrack();
     const operationId = this.operationId;
-    try {
-      await track.applyConstraints({
-        width: { exact: size.width },
-        height: { exact: size.height },
-        resizeMode: { ideal: "none" },
-      } as ExtendedConstraints);
-    } catch (error) {
-      if (!isOverconstrained(error)) throw error;
-      this.assertActiveTrack(operationId, track);
-      await track.applyConstraints({
-        width: { ideal: size.width },
-        height: { ideal: size.height },
-        resizeMode: { ideal: "none" },
-      } as ExtendedConstraints);
-    }
+    await track.applyConstraints({
+      width: { exact: size.width },
+      height: { exact: size.height },
+      resizeMode: { exact: "none" },
+    } as ExtendedConstraints);
     this.assertActiveTrack(operationId, track);
-    return this.settings();
+    const settings = this.settings();
+    this.assertExactSettings(settings, size);
+    return settings;
   }
 
   async applyZoom(zoom: number): Promise<CameraSettingsSnapshot> {
     if (!Number.isFinite(zoom)) throw new Error("Camera zoom must be a finite number.");
     const track = this.requireTrack();
     const operationId = this.operationId;
-    await track.applyConstraints({ advanced: [{ zoom }] } as ExtendedConstraints);
+    const current = this.settingsForTrack(track);
+    await track.applyConstraints({
+      width: { exact: current.width },
+      height: { exact: current.height },
+      resizeMode: { exact: "none" },
+      advanced: [{ zoom }],
+    } as ExtendedConstraints);
     this.assertActiveTrack(operationId, track);
-    return this.settings();
+    const settings = this.settings();
+    this.assertExactSettings(settings, current);
+    return settings;
   }
 
   async applyFocusMode(focusMode: string): Promise<CameraSettingsSnapshot> {
     if (!focusMode) throw new Error("Camera focus mode is required.");
     const track = this.requireTrack();
     const operationId = this.operationId;
-    await track.applyConstraints({ advanced: [{ focusMode }] } as ExtendedConstraints);
+    const current = this.settingsForTrack(track);
+    await track.applyConstraints({
+      width: { exact: current.width },
+      height: { exact: current.height },
+      resizeMode: { exact: "none" },
+      advanced: [{ focusMode }],
+    } as ExtendedConstraints);
     this.assertActiveTrack(operationId, track);
-    return this.settings();
+    const settings = this.settings();
+    this.assertExactSettings(settings, current);
+    return settings;
   }
 
   capabilities(): ExtendedCapabilities | undefined {
@@ -192,23 +198,7 @@ export class CameraController {
   }
 
   settings(): CameraSettingsSnapshot {
-    const track = this.requireTrack();
-    const settings = track.getSettings() as ExtendedSettings;
-    if (!settings.width || !settings.height) {
-      throw new Error("The browser did not report the active camera dimensions.");
-    }
-    return {
-      width: settings.width,
-      height: settings.height,
-      deviceId: settings.deviceId,
-      frameRate: settings.frameRate,
-      aspectRatio: settings.aspectRatio,
-      facingMode: settings.facingMode,
-      resizeMode: settings.resizeMode,
-      zoom: settings.zoom,
-      focusMode: settings.focusMode,
-      cameraLabel: track.label || undefined,
-    };
+    return this.settingsForTrack(this.requireTrack());
   }
 
   currentStream(): MediaStream | undefined {
@@ -230,28 +220,26 @@ export class CameraController {
 
   private async acquireWithRetry(
     request: CameraRequest,
-    exact: boolean,
     operationId: number,
   ): Promise<{ stream: MediaStream; track: MediaStreamTrack }> {
     try {
-      return await this.acquire(request, exact, operationId);
+      return await this.acquire(request, operationId);
     } catch (error) {
       if (!isTransientCaptureFailure(error)) throw error;
       await wait(CAPTURE_RETRY_DELAY_MS);
       this.assertCurrent(operationId);
-      return this.acquire(request, exact, operationId);
+      return this.acquire(request, operationId);
     }
   }
 
   private async acquire(
     request: CameraRequest,
-    exact: boolean,
     operationId: number,
   ): Promise<{ stream: MediaStream; track: MediaStreamTrack }> {
     this.assertCurrent(operationId);
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
-      video: videoConstraints(request, exact),
+      video: videoConstraints(request),
     });
     this.assertCurrent(operationId, stream);
     const track = stream.getVideoTracks()[0];
@@ -266,7 +254,65 @@ export class CameraController {
       stopStream(stream);
       throw captureFailure("The camera video track ended while starting.");
     }
+    try {
+      this.assertExactSettings(
+        this.settingsForTrack(track),
+        request.width === undefined || request.height === undefined
+          ? undefined
+          : { width: request.width, height: request.height },
+      );
+    } catch (error) {
+      stopStream(stream);
+      throw error;
+    }
     return { stream, track };
+  }
+
+  private requireUnscaledCaptureSupport(): void {
+    const supported = navigator.mediaDevices.getSupportedConstraints?.() as
+      | ExtendedSupportedConstraints
+      | undefined;
+    if (!supported?.resizeMode) {
+      throw new Error(
+        "This browser cannot guarantee an uncropped, unscaled camera stream because resizeMode is unsupported.",
+      );
+    }
+  }
+
+  private settingsForTrack(track: MediaStreamTrack): CameraSettingsSnapshot {
+    const settings = track.getSettings() as ExtendedSettings;
+    if (!settings.width || !settings.height) {
+      throw new Error("The browser did not report the active camera dimensions.");
+    }
+    return {
+      width: settings.width,
+      height: settings.height,
+      deviceId: settings.deviceId,
+      frameRate: settings.frameRate,
+      aspectRatio: settings.aspectRatio,
+      facingMode: settings.facingMode,
+      resizeMode: settings.resizeMode,
+      zoom: settings.zoom,
+      focusMode: settings.focusMode,
+      cameraLabel: track.label || undefined,
+    };
+  }
+
+  private assertExactSettings(
+    settings: CameraSettingsSnapshot,
+    requestedSize?: ImageSize,
+  ): void {
+    if (settings.resizeMode !== "none") {
+      throw new Error("The browser did not provide an uncropped, unscaled camera stream.");
+    }
+    if (
+      requestedSize &&
+      (settings.width !== requestedSize.width || settings.height !== requestedSize.height)
+    ) {
+      throw new Error(
+        `The camera did not provide the exact requested mode (${requestedSize.width} × ${requestedSize.height}).`,
+      );
+    }
   }
 
   private assertCurrent(operationId: number, stream?: MediaStream): void {
@@ -299,10 +345,3 @@ export async function listVideoDevices(): Promise<MediaDeviceInfo[]> {
   const devices = await navigator.mediaDevices.enumerateDevices();
   return devices.filter((device) => device.kind === "videoinput");
 }
-
-export const RESOLUTION_PRESETS: ReadonlyArray<ImageSize & { label: string }> = [
-  { width: 640, height: 480, label: "640 × 480" },
-  { width: 1280, height: 720, label: "1280 × 720" },
-  { width: 1920, height: 1080, label: "1920 × 1080" },
-  { width: 3840, height: 2160, label: "3840 × 2160" },
-];

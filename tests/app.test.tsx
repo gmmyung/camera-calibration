@@ -48,6 +48,12 @@ describe("application shell", () => {
       expect((button as HTMLButtonElement).disabled).toBe(false);
     });
     expect(screen.getByLabelText("Squares across").getAttribute("max")).toBe("30");
+    expect((screen.getByLabelText("Width") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Height") as HTMLInputElement).value).toBe("");
+    expect(screen.getByRole("button", { name: "Connect camera" }).getAttribute("type")).toBe(
+      "submit",
+    );
+    expect(screen.queryByText("Print at 100%. Verify the 100 mm ruler.")).toBeNull();
     expect(screen.getByText("OpenCV 4.13.0-test")).toBeTruthy();
   });
 });

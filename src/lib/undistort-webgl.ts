@@ -26,9 +26,12 @@ out vec4 outputColor;
 
 uniform sampler2D videoTexture;
 uniform vec2 sourceSize;
-uniform vec2 focalLength;
-uniform vec2 principalPoint;
-uniform float skew;
+uniform vec2 sourceFocalLength;
+uniform vec2 sourcePrincipalPoint;
+uniform float sourceSkew;
+uniform vec2 outputFocalLength;
+uniform vec2 outputPrincipalPoint;
+uniform float outputSkew;
 uniform vec4 distortion;
 uniform float radialK3;
 uniform int lensModel;
@@ -71,17 +74,17 @@ void main() {
     videoCoordinate.x * sourceSize.x,
     (1.0 - videoCoordinate.y) * sourceSize.y
   ) - vec2(0.5);
-  float normalizedY = (destinationPixel.y - principalPoint.y) / focalLength.y;
+  float normalizedY = (destinationPixel.y - outputPrincipalPoint.y) / outputFocalLength.y;
   float normalizedX = (
-    destinationPixel.x - principalPoint.x - skew * normalizedY
-  ) / focalLength.x;
+    destinationPixel.x - outputPrincipalPoint.x - outputSkew * normalizedY
+  ) / outputFocalLength.x;
   vec2 normalized = vec2(normalizedX, normalizedY);
   vec2 distorted = lensModel == 0
     ? standardDistortion(normalized)
     : fisheyeDistortion(normalized);
   vec2 sourcePixel = vec2(
-    focalLength.x * distorted.x + skew * distorted.y + principalPoint.x,
-    focalLength.y * distorted.y + principalPoint.y
+    sourceFocalLength.x * distorted.x + sourceSkew * distorted.y + sourcePrincipalPoint.x,
+    sourceFocalLength.y * distorted.y + sourcePrincipalPoint.y
   );
   vec2 sampleCoordinate = (sourcePixel + vec2(0.5)) / sourceSize;
   if (
@@ -96,12 +99,98 @@ void main() {
 `;
 
 export interface FrameCalibrationUniforms {
-  focalLength: [number, number];
-  principalPoint: [number, number];
-  skew: number;
+  sourceFocalLength: [number, number];
+  sourcePrincipalPoint: [number, number];
+  sourceSkew: number;
+  outputFocalLength: [number, number];
+  outputPrincipalPoint: [number, number];
+  outputSkew: number;
   distortion: [number, number, number, number];
   radialK3: number;
   lensModel: 0 | 1;
+}
+
+function estimateFisheyePreviewMatrix(
+  result: CalibrationResultV1,
+): CalibrationResultV1["cameraMatrix"] {
+  const width = result.imageSize.width;
+  const height = result.imageSize.height;
+  const fx = result.cameraMatrix[0];
+  const fy = result.cameraMatrix[4];
+  const cx = result.cameraMatrix[2];
+  const cy = result.cameraMatrix[5];
+  const [k1, k2, k3, k4] = result.distortion;
+  if (
+    result.distortion.length !== 4 ||
+    ![width, height, fx, fy, cx, cy, k1, k2, k3, k4].every(Number.isFinite) ||
+    width <= 0 ||
+    height <= 0 ||
+    fx <= 0 ||
+    fy <= 0
+  ) {
+    throw new Error("The calibration cannot produce a fisheye preview matrix.");
+  }
+
+  const undistort = ([pixelX, pixelY]: [number, number]): [number, number] => {
+    const normalizedX = (pixelX - cx) / fx;
+    const normalizedY = (pixelY - cy) / fy;
+    const thetaDistorted = Math.min(Math.hypot(normalizedX, normalizedY), Math.PI / 2);
+    if (thetaDistorted < 1e-8) return [normalizedX, normalizedY];
+    let theta = thetaDistorted;
+    for (let iteration = 0; iteration < 10; iteration += 1) {
+      const theta2 = theta * theta;
+      const theta4 = theta2 * theta2;
+      const theta6 = theta4 * theta2;
+      const theta8 = theta4 * theta4;
+      const correction =
+        (theta * (1 + k1! * theta2 + k2! * theta4 + k3! * theta6 + k4! * theta8) -
+          thetaDistorted) /
+        (1 +
+          3 * k1! * theta2 +
+          5 * k2! * theta4 +
+          7 * k3! * theta6 +
+          9 * k4! * theta8);
+      if (!Number.isFinite(correction)) {
+        throw new Error("The calibration cannot produce a fisheye preview matrix.");
+      }
+      theta -= correction;
+      if (Math.abs(correction) < 1e-8) break;
+    }
+    const scale = Math.tan(theta) / thetaDistorted;
+    if (!Number.isFinite(scale) || theta < 0) {
+      throw new Error("The calibration cannot produce a fisheye preview matrix.");
+    }
+    return [normalizedX * scale, normalizedY * scale];
+  };
+
+  const points = [
+    undistort([width / 2, 0]),
+    undistort([width, height / 2]),
+    undistort([width / 2, height]),
+    undistort([0, height / 2]),
+  ];
+  const centerX = points.reduce((sum, point) => sum + point[0], 0) / points.length;
+  const aspectRatio = fx / fy;
+  const adjustedPoints = points.map(([x, y]) => [x, y * aspectRatio] as const);
+  const centerY =
+    adjustedPoints.reduce((sum, point) => sum + point[1], 0) / adjustedPoints.length;
+  const minX = Math.min(...adjustedPoints.map(([x]) => x));
+  const maxX = Math.max(...adjustedPoints.map(([x]) => x));
+  const minY = Math.min(...adjustedPoints.map(([, y]) => y));
+  const maxY = Math.max(...adjustedPoints.map(([, y]) => y));
+  const focalLength = Math.min(
+    (width * 0.5) / (centerX - minX),
+    (width * 0.5) / (maxX - centerX),
+    (height * 0.5 * aspectRatio) / (centerY - minY),
+    (height * 0.5 * aspectRatio) / (maxY - centerY),
+  );
+  const outputFy = focalLength / aspectRatio;
+  const outputCx = -centerX * focalLength + width * 0.5;
+  const outputCy = (-centerY * focalLength + height * aspectRatio * 0.5) / aspectRatio;
+  if (![focalLength, outputFy, outputCx, outputCy].every(Number.isFinite) || focalLength <= 0 || outputFy <= 0) {
+    throw new Error("The calibration cannot produce a fisheye preview matrix.");
+  }
+  return [focalLength, 0, outputCx, 0, outputFy, outputCy, 0, 0, 1];
 }
 
 export function frameCalibrationUniforms(
@@ -114,23 +203,53 @@ export function frameCalibrationUniforms(
   }
   const scaleX = width / result.imageSize.width;
   const scaleY = height / result.imageSize.height;
-  const fx = result.cameraMatrix[0];
-  const matrixSkew = result.cameraMatrix[1];
-  const cx = result.cameraMatrix[2];
-  const fy = result.cameraMatrix[4];
-  const cy = result.cameraMatrix[5];
-  if (![fx, matrixSkew, cx, fy, cy, ...result.distortion].every(Number.isFinite)) {
-    throw new Error("The calibration contains non-finite values.");
-  }
-  if (fx <= 0 || fy <= 0) throw new Error("The calibration has invalid focal lengths.");
-  if (result.model === "pinhole-radtan5") {
-    if (result.distortion.length !== 5) {
-      throw new Error("Standard-lens preview requires five distortion coefficients.");
+  const scaledIntrinsics = (
+    matrix: CalibrationResultV1["cameraMatrix"],
+  ): {
+    focalLength: [number, number];
+    principalPoint: [number, number];
+    skew: number;
+  } => {
+    const fx = matrix[0];
+    const matrixSkew = matrix[1];
+    const cx = matrix[2];
+    const fy = matrix[4];
+    const cy = matrix[5];
+    if (![fx, matrixSkew, cx, fy, cy].every(Number.isFinite)) {
+      throw new Error("The calibration contains non-finite values.");
     }
+    if (fx <= 0 || fy <= 0) throw new Error("The calibration has invalid focal lengths.");
     return {
       focalLength: [fx * scaleX, fy * scaleY],
       principalPoint: [cx * scaleX, cy * scaleY],
       skew: matrixSkew * scaleX,
+    };
+  };
+  if (!result.distortion.every(Number.isFinite)) {
+    throw new Error("The calibration contains non-finite values.");
+  }
+  if (result.model === "pinhole-radtan5" && result.distortion.length !== 5) {
+    throw new Error("Standard-lens preview requires five distortion coefficients.");
+  }
+  if (result.model === "fisheye-kb4" && result.distortion.length !== 4) {
+    throw new Error("Fisheye preview requires four distortion coefficients.");
+  }
+  const source = scaledIntrinsics(result.cameraMatrix);
+  const output = scaledIntrinsics(
+    result.model === "fisheye-kb4" && result.previewCameraMatrix
+      ? result.previewCameraMatrix
+      : result.model === "fisheye-kb4"
+        ? estimateFisheyePreviewMatrix(result)
+        : result.cameraMatrix,
+  );
+  if (result.model === "pinhole-radtan5") {
+    return {
+      sourceFocalLength: source.focalLength,
+      sourcePrincipalPoint: source.principalPoint,
+      sourceSkew: source.skew,
+      outputFocalLength: output.focalLength,
+      outputPrincipalPoint: output.principalPoint,
+      outputSkew: output.skew,
       distortion: [
         result.distortion[0]!,
         result.distortion[1]!,
@@ -141,13 +260,13 @@ export function frameCalibrationUniforms(
       lensModel: 0,
     };
   }
-  if (result.distortion.length !== 4) {
-    throw new Error("Fisheye preview requires four distortion coefficients.");
-  }
   return {
-    focalLength: [fx * scaleX, fy * scaleY],
-    principalPoint: [cx * scaleX, cy * scaleY],
-    skew: matrixSkew * scaleX,
+    sourceFocalLength: source.focalLength,
+    sourcePrincipalPoint: source.principalPoint,
+    sourceSkew: source.skew,
+    outputFocalLength: output.focalLength,
+    outputPrincipalPoint: output.principalPoint,
+    outputSkew: output.skew,
     distortion: result.distortion as [number, number, number, number],
     radialK3: 0,
     lensModel: 1,
@@ -206,9 +325,12 @@ function requireUniform(
 interface UniformLocations {
   videoTexture: WebGLUniformLocation;
   sourceSize: WebGLUniformLocation;
-  focalLength: WebGLUniformLocation;
-  principalPoint: WebGLUniformLocation;
-  skew: WebGLUniformLocation;
+  sourceFocalLength: WebGLUniformLocation;
+  sourcePrincipalPoint: WebGLUniformLocation;
+  sourceSkew: WebGLUniformLocation;
+  outputFocalLength: WebGLUniformLocation;
+  outputPrincipalPoint: WebGLUniformLocation;
+  outputSkew: WebGLUniformLocation;
   distortion: WebGLUniformLocation;
   radialK3: WebGLUniformLocation;
   lensModel: WebGLUniformLocation;
@@ -252,9 +374,12 @@ export class WebGlUndistortRenderer {
       this.uniforms = {
         videoTexture: requireUniform(gl, program, "videoTexture"),
         sourceSize: requireUniform(gl, program, "sourceSize"),
-        focalLength: requireUniform(gl, program, "focalLength"),
-        principalPoint: requireUniform(gl, program, "principalPoint"),
-        skew: requireUniform(gl, program, "skew"),
+        sourceFocalLength: requireUniform(gl, program, "sourceFocalLength"),
+        sourcePrincipalPoint: requireUniform(gl, program, "sourcePrincipalPoint"),
+        sourceSkew: requireUniform(gl, program, "sourceSkew"),
+        outputFocalLength: requireUniform(gl, program, "outputFocalLength"),
+        outputPrincipalPoint: requireUniform(gl, program, "outputPrincipalPoint"),
+        outputSkew: requireUniform(gl, program, "outputSkew"),
         distortion: requireUniform(gl, program, "distortion"),
         radialK3: requireUniform(gl, program, "radialK3"),
         lensModel: requireUniform(gl, program, "lensModel"),
@@ -336,9 +461,12 @@ export class WebGlUndistortRenderer {
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, video);
     }
     gl.uniform2f(this.uniforms.sourceSize, sourceWidth, sourceHeight);
-    gl.uniform2f(this.uniforms.focalLength, ...calibration.focalLength);
-    gl.uniform2f(this.uniforms.principalPoint, ...calibration.principalPoint);
-    gl.uniform1f(this.uniforms.skew, calibration.skew);
+    gl.uniform2f(this.uniforms.sourceFocalLength, ...calibration.sourceFocalLength);
+    gl.uniform2f(this.uniforms.sourcePrincipalPoint, ...calibration.sourcePrincipalPoint);
+    gl.uniform1f(this.uniforms.sourceSkew, calibration.sourceSkew);
+    gl.uniform2f(this.uniforms.outputFocalLength, ...calibration.outputFocalLength);
+    gl.uniform2f(this.uniforms.outputPrincipalPoint, ...calibration.outputPrincipalPoint);
+    gl.uniform1f(this.uniforms.outputSkew, calibration.outputSkew);
     gl.uniform4f(this.uniforms.distortion, ...calibration.distortion);
     gl.uniform1f(this.uniforms.radialK3, calibration.radialK3);
     gl.uniform1i(this.uniforms.lensModel, calibration.lensModel);

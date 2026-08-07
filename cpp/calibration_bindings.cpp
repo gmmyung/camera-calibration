@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
@@ -199,6 +200,63 @@ double convex_hull_area(const std::vector<cv::Point2f>& points) {
   return std::abs(cv::contourArea(hull));
 }
 
+using GridKey = std::pair<std::int64_t, std::int64_t>;
+
+GridKey object_grid_key(const cv::Point3f& point) {
+  constexpr double kCoordinateScale = 10'000.0;
+  return {static_cast<std::int64_t>(std::llround(point.x * kCoordinateScale)),
+          static_cast<std::int64_t>(std::llround(point.y * kCoordinateScale))};
+}
+
+double perspective_skew(const std::vector<cv::Point3f>& object_points,
+                        const std::vector<cv::Point2f>& image_points) {
+  if (object_points.size() < 4 || image_points.size() != object_points.size()) return 0.0;
+  std::map<GridKey, std::size_t> point_indices;
+  for (std::size_t index = 0; index < object_points.size(); ++index) {
+    point_indices.emplace(object_grid_key(object_points[index]), index);
+  }
+
+  double largest_object_area = 0.0;
+  std::array<std::size_t, 3> best_indices{};
+  bool found_rectangle = false;
+  for (std::size_t first = 0; first < object_points.size(); ++first) {
+    const GridKey first_key = object_grid_key(object_points[first]);
+    for (std::size_t second = first + 1; second < object_points.size(); ++second) {
+      const GridKey second_key = object_grid_key(object_points[second]);
+      if (first_key.first == second_key.first || first_key.second == second_key.second) continue;
+      const std::int64_t min_x = std::min(first_key.first, second_key.first);
+      const std::int64_t max_x = std::max(first_key.first, second_key.first);
+      const std::int64_t min_y = std::min(first_key.second, second_key.second);
+      const std::int64_t max_y = std::max(first_key.second, second_key.second);
+      const auto upper_left = point_indices.find({min_x, min_y});
+      const auto upper_right = point_indices.find({max_x, min_y});
+      const auto lower_right = point_indices.find({max_x, max_y});
+      if (upper_left == point_indices.end() || upper_right == point_indices.end() ||
+          lower_right == point_indices.end() ||
+          point_indices.find({min_x, max_y}) == point_indices.end()) {
+        continue;
+      }
+      const double object_area = static_cast<double>(max_x - min_x) *
+                                 static_cast<double>(max_y - min_y);
+      if (object_area <= largest_object_area) continue;
+      largest_object_area = object_area;
+      best_indices = {upper_left->second, upper_right->second, lower_right->second};
+      found_rectangle = true;
+    }
+  }
+  if (!found_rectangle) return 0.0;
+
+  const cv::Point2f left = image_points[best_indices[0]] - image_points[best_indices[1]];
+  const cv::Point2f down = image_points[best_indices[2]] - image_points[best_indices[1]];
+  const double denominator = cv::norm(left) * cv::norm(down);
+  if (!std::isfinite(denominator) || denominator <= std::numeric_limits<double>::epsilon()) {
+    return 0.0;
+  }
+  const double cosine = std::clamp(static_cast<double>(left.dot(down)) / denominator, -1.0, 1.0);
+  const double angle = std::acos(cosine);
+  return std::clamp(2.0 * std::abs(kPi / 2.0 - angle), 0.0, 1.0);
+}
+
 double minimum_edge_distance(const std::vector<cv::Point2f>& points, int width, int height) {
   double minimum = std::numeric_limits<double>::infinity();
   for (const auto& point : points) {
@@ -243,7 +301,8 @@ val detection_result(const std::vector<cv::Point2f>& image_points,
                      int available_corners,
                      bool require_all,
                      double sharpness) {
-  const double area_ratio = convex_hull_area(image_points) /
+  const double board_area = convex_hull_area(image_points);
+  const double area_ratio = board_area /
                             (static_cast<double>(width) * static_cast<double>(height));
   const double edge_distance = minimum_edge_distance(image_points, width, height);
   const int required = require_all
@@ -258,12 +317,25 @@ val detection_result(const std::vector<cv::Point2f>& image_points,
   double center_x = 0.5;
   double center_y = 0.5;
   if (!image_points.empty()) {
+    double mean_x = 0.0;
+    double mean_y = 0.0;
     for (const auto& point : image_points) {
-      center_x += point.x / width;
-      center_y += point.y / height;
+      mean_x += point.x;
+      mean_y += point.y;
     }
-    center_x = (center_x - 0.5) / image_points.size();
-    center_y = (center_y - 0.5) / image_points.size();
+    mean_x /= image_points.size();
+    mean_y /= image_points.size();
+    const double board_extent = std::sqrt(std::max(0.0, board_area));
+    const double horizontal_range = width - board_extent;
+    const double vertical_range = height - board_extent;
+    center_x = horizontal_range > 1.0
+                   ? (mean_x - board_extent / 2.0) / horizontal_range
+                   : mean_x / width;
+    center_y = vertical_range > 1.0
+                   ? (mean_y - board_extent / 2.0) / vertical_range
+                   : mean_y / height;
+    center_x = std::clamp(center_x, 0.0, 1.0);
+    center_y = std::clamp(center_y, 0.0, 1.0);
   }
   const int column = std::clamp(static_cast<int>(center_x * 3.0), 0, 2);
   const int row = std::clamp(static_cast<int>(center_y * 3.0), 0, 2);
@@ -295,6 +367,7 @@ val detection_result(const std::vector<cv::Point2f>& image_points,
   pose.set("areaRatio", area_ratio);
   pose.set("planeAngleDegrees",
            provisional_plane_angle(object_points, image_points, width, height));
+  pose.set("skew", perspective_skew(object_points, image_points));
   pose.set("coverageCell", row * 3 + column);
 
   val image_size = val::object();
@@ -331,6 +404,7 @@ val failed_detection(int width, int height, const std::string& message) {
   pose.set("centerY", 0.5);
   pose.set("areaRatio", 0.0);
   pose.set("planeAngleDegrees", 0.0);
+  pose.set("skew", 0.0);
   pose.set("coverageCell", 4);
   val result = val::object();
   result.set("ok", true);
@@ -660,6 +734,21 @@ val solve_calibration(const val& input,
   std::vector<double> distortion(state.distortion.begin<double>(), state.distortion.end<double>());
   result.set("cameraMatrix", number_array(camera_matrix));
   result.set("distortion", number_array(distortion));
+  if (model == "fisheye-kb4") {
+    cv::Mat preview_camera_matrix;
+    cv::fisheye::estimateNewCameraMatrixForUndistortRectify(
+        state.camera_matrix, state.distortion, cv::Size(width, height), cv::Matx33d::eye(),
+        preview_camera_matrix, 1.0, cv::Size(width, height));
+    if (preview_camera_matrix.rows != 3 || preview_camera_matrix.cols != 3 ||
+        preview_camera_matrix.type() != CV_64F || !cv::checkRange(preview_camera_matrix) ||
+        preview_camera_matrix.at<double>(0, 0) <= 0.0 ||
+        preview_camera_matrix.at<double>(1, 1) <= 0.0) {
+      throw std::runtime_error("OpenCV returned an invalid fisheye preview matrix.");
+    }
+    std::vector<double> preview_matrix(preview_camera_matrix.begin<double>(),
+                                       preview_camera_matrix.end<double>());
+    result.set("previewCameraMatrix", number_array(preview_matrix));
+  }
   result.set("rmsReprojectionError", state.rms);
 
   val errors = val::object();
@@ -753,8 +842,17 @@ val undistort_frame(const val& rgba,
   if (model == "pinhole-radtan5") {
     cv::undistort(source, output, camera_matrix, distortion, camera_matrix);
   } else if (model == "fisheye-kb4") {
-    cv::fisheye::undistortImage(source, output, camera_matrix, distortion, camera_matrix,
-                                cv::Size(width, height));
+    cv::Mat preview_camera_matrix;
+    cv::fisheye::estimateNewCameraMatrixForUndistortRectify(
+        camera_matrix, distortion, cv::Size(width, height), cv::Matx33d::eye(),
+        preview_camera_matrix, 1.0, cv::Size(width, height));
+    if (!cv::checkRange(preview_camera_matrix) ||
+        preview_camera_matrix.at<double>(0, 0) <= 0.0 ||
+        preview_camera_matrix.at<double>(1, 1) <= 0.0) {
+      throw std::runtime_error("OpenCV returned an invalid fisheye preview matrix.");
+    }
+    cv::fisheye::undistortImage(source, output, camera_matrix, distortion,
+                                preview_camera_matrix, cv::Size(width, height));
   }
   if (output.rows != height || output.cols != width || output.type() != CV_8UC4) {
     throw std::runtime_error("OpenCV returned an invalid undistorted image.");
