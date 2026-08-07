@@ -32,6 +32,9 @@ emcmake cmake -S "${SOURCE_ROOT}" -B "${OPENCV_BUILD}" -G"Unix Makefiles" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_C_FLAGS="-msimd128" \
   -DCMAKE_CXX_FLAGS="-msimd128" \
+  -DCPU_BASELINE= \
+  -DCPU_DISPATCH= \
+  -DCV_ENABLE_INTRINSICS=ON \
   -DBUILD_SHARED_LIBS=OFF \
   -DBUILD_LIST=core,imgproc,calib3d,objdetect \
   -DBUILD_TESTS=OFF \
