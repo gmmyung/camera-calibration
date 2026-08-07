@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+.cache/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+public/wasm/*.js
+public/wasm/*.wasm
+!.gitkeep
+*.log
+.DS_Store
