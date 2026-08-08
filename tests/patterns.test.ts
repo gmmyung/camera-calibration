@@ -17,22 +17,10 @@ describe("pattern definitions", () => {
     expect(validatePattern(CHESSBOARD_PRESET)).toEqual([]);
   });
 
-  it("rejects impossible marker geometry", () => {
-    expect(
-      validatePattern({
-        ...CHARUCO_PRESET,
-        markerLengthMm: CHARUCO_PRESET.kind === "charuco" ? 30 : 0,
-      }),
-    ).toContain("Marker length must be positive and smaller than the square length.");
-  });
-
   it("rejects fractional, non-finite, and oversized dimensions", () => {
     expect(validatePattern({ ...CHESSBOARD_PRESET, innerCornersX: 3.5 })).not.toEqual([]);
     expect(validatePattern({ ...CHESSBOARD_PRESET, innerCornersY: Number.NaN })).not.toEqual([]);
     expect(validatePattern({ ...CHARUCO_PRESET, squaresX: 31 })).not.toEqual([]);
-    expect(validatePattern({ ...CHARUCO_PRESET, squareLengthMm: Number.POSITIVE_INFINITY })).not.toEqual(
-      [],
-    );
   });
 
   it("rejects boards with more markers than the dictionary contains", () => {

@@ -40,8 +40,6 @@ export interface CharucoPatternConfig {
   kind: "charuco";
   squaresX: number;
   squaresY: number;
-  squareLengthMm: number;
-  markerLengthMm: number;
   dictionary: DictionaryName;
   legacyPattern: boolean;
 }
@@ -50,7 +48,6 @@ export interface ChessboardPatternConfig {
   kind: "chessboard";
   innerCornersX: number;
   innerCornersY: number;
-  squareLengthMm: number;
 }
 
 export type PatternConfig = CharucoPatternConfig | ChessboardPatternConfig;

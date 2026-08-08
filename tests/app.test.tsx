@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/app/App";
 import { clearLocalSession } from "../src/lib/session-db";
@@ -74,9 +74,9 @@ describe("application shell", () => {
     });
     expect(screen.getByRole("heading", { name: "Calibration board" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Display board" })).toBeTruthy();
-    expect(screen.getByLabelText("Display profile")).toBeTruthy();
-    expect(screen.getByLabelText("Display preset")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Verify with ruler" })).toBeTruthy();
+    expect(screen.queryByLabelText("Display profile")).toBeNull();
+    expect(screen.queryByLabelText("Display preset")).toBeNull();
+    expect(screen.queryByText(/ppi|ruler|square size|marker size/i)).toBeNull();
     expect(screen.queryByRole("heading", { name: "Target" })).toBeNull();
     expect(screen.getByLabelText("Columns (squares)").getAttribute("max")).toBe("30");
     expect((screen.getByLabelText("Width") as HTMLInputElement).value).toBe("");
@@ -160,46 +160,12 @@ describe("application shell", () => {
       expect((screen.getByRole("button", { name: "Download board SVG" }) as HTMLButtonElement).disabled).toBe(false);
     });
     fireEvent.click(screen.getByRole("button", { name: "Chessboard" }));
-    fireEvent.input(screen.getByLabelText("Square size (mm)"), { target: { value: "10" } });
-    fireEvent.change(screen.getByLabelText("Display preset"), {
-      target: { value: "24-1920x1080" },
-    });
     const displayButton = screen.getByRole("button", { name: "Display board" });
     expect((displayButton as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(displayButton);
     await waitFor(() => {
       expect(screen.getByRole("dialog", { name: "Calibration board display" })).toBeTruthy();
       expect(screen.getByRole("heading", { name: "Capture" })).toBeTruthy();
-    });
-  });
-
-  it("stores a ruler-verified display profile", async () => {
-    render(<App />);
-    fireEvent.change(screen.getByLabelText("Display preset"), {
-      target: { value: "27-2560x1440" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Verify with ruler" }));
-    const dialog = screen.getByRole("dialog", { name: "Verify display scale" });
-    fireEvent.input(within(dialog).getByLabelText("Measured length (mm)"), {
-      target: { value: "150" },
-    });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Apply" }));
-    await waitFor(() => {
-      expect(screen.getByText("Verified")).toBeTruthy();
-      expect((screen.getByLabelText("Display profile") as HTMLSelectElement).value).not.toBe("");
-    });
-  });
-
-  it("applies an Apple display preset using its published pixel density", async () => {
-    render(<App />);
-    fireEvent.change(screen.getByLabelText("Display preset"), {
-      target: { value: "iphone-air" },
-    });
-    await waitFor(() => {
-      expect((screen.getByLabelText("Native width") as HTMLInputElement).value).toBe("1260");
-      expect((screen.getByLabelText("Native height") as HTMLInputElement).value).toBe("2736");
-      expect((screen.getByLabelText("Physical size from") as HTMLSelectElement).value).toBe("pixel-density");
-      expect((screen.getByLabelText("Pixel density (ppi)") as HTMLInputElement).value).toBe("460");
     });
   });
 });

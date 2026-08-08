@@ -2,7 +2,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <iomanip>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -31,9 +30,10 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr std::uint64_t kMaxSourcePixels = 40'000'000;
 constexpr std::uint64_t kMaxProcessingPixels = 20'000'000;
 constexpr int kMaxPatternGridSize = 30;
-constexpr double kMaxPatternLengthMm = 10'000.0;
 constexpr int kMaxObservations = 100;
 constexpr int kMaxPointsPerObservation = 1'000;
+constexpr float kCharucoSquareLength = 1.0F;
+constexpr float kCharucoMarkerLength = 0.7F;
 
 struct Observation {
   std::string id;
@@ -152,23 +152,9 @@ int pattern_dimension(const val& pattern, const char* key) {
   return static_cast<int>(value);
 }
 
-double pattern_length(const val& pattern, const char* key) {
-  const double value = pattern[key].as<double>();
-  if (!std::isfinite(value) || value <= 0.0 || value > kMaxPatternLengthMm) {
-    throw std::runtime_error(std::string(key) +
-                             " must be greater than zero and no more than 10000 mm.");
-  }
-  return value;
-}
-
-void validate_charuco_geometry(int squares_x,
-                               int squares_y,
-                               double square_length,
-                               double marker_length,
-                               const cv::aruco::Dictionary& dictionary) {
-  if (marker_length >= square_length) {
-    throw std::runtime_error("Marker length must be smaller than square length.");
-  }
+void validate_charuco_dictionary(int squares_x,
+                                 int squares_y,
+                                 const cv::aruco::Dictionary& dictionary) {
   const int marker_count = squares_x * squares_y / 2;
   if (marker_count > dictionary.bytesList.rows) {
     throw std::runtime_error("The selected ArUco dictionary has too few markers for this board.");
@@ -437,16 +423,14 @@ val detect_frame(const val& rgba, int width, int height, const val& pattern) {
   if (kind == "charuco") {
     const int squares_x = pattern_dimension(pattern, "squaresX");
     const int squares_y = pattern_dimension(pattern, "squaresY");
-    const double square_length = pattern_length(pattern, "squareLengthMm");
-    const double marker_length = pattern_length(pattern, "markerLengthMm");
     const std::string dictionary_name = pattern["dictionary"].as<std::string>();
     const bool legacy_pattern = pattern["legacyPattern"].as<bool>();
     cv::aruco::Dictionary dictionary =
         cv::aruco::getPredefinedDictionary(dictionary_type(dictionary_name));
-    validate_charuco_geometry(squares_x, squares_y, square_length, marker_length, dictionary);
+    validate_charuco_dictionary(squares_x, squares_y, dictionary);
     cv::aruco::CharucoBoard board(cv::Size(squares_x, squares_y),
-                                  static_cast<float>(square_length),
-                                  static_cast<float>(marker_length), dictionary);
+                                  kCharucoSquareLength,
+                                  kCharucoMarkerLength, dictionary);
     board.setLegacyPattern(legacy_pattern);
     cv::aruco::CharucoDetector detector(board);
     std::vector<cv::Point2f> corners;
@@ -469,7 +453,6 @@ val detect_frame(const val& rgba, int width, int height, const val& pattern) {
   if (kind == "chessboard") {
     const int corners_x = pattern_dimension(pattern, "innerCornersX");
     const int corners_y = pattern_dimension(pattern, "innerCornersY");
-    const float square_length = static_cast<float>(pattern_length(pattern, "squareLengthMm"));
     std::vector<cv::Point2f> corners;
     const bool found = cv::findChessboardCornersSB(
         gray, cv::Size(corners_x, corners_y), corners,
@@ -481,7 +464,7 @@ val detect_frame(const val& rgba, int width, int height, const val& pattern) {
     ids.reserve(corners_x * corners_y);
     for (int row = 0; row < corners_y; ++row) {
       for (int column = 0; column < corners_x; ++column) {
-        object_points.emplace_back(column * square_length, row * square_length, 0.0f);
+        object_points.emplace_back(static_cast<float>(column), static_cast<float>(row), 0.0f);
         ids.push_back(row * corners_x + column);
       }
     }
@@ -1017,24 +1000,24 @@ std::vector<cv::Rect> merged_black_rectangles(const cv::Mat& binary) {
 
 std::string generate_pattern_svg(const val& pattern) {
   const std::string kind = pattern["kind"].as<std::string>();
-  double board_width_mm = 0.0;
-  double board_height_mm = 0.0;
+  int pixels_per_square = 80;
+  int board_width = 0;
+  int board_height = 0;
   std::ostringstream board_elements;
-  board_elements << std::fixed << std::setprecision(5);
 
   if (kind == "chessboard") {
     const int inner_x = pattern_dimension(pattern, "innerCornersX");
     const int inner_y = pattern_dimension(pattern, "innerCornersY");
-    const double square = pattern_length(pattern, "squareLengthMm");
     const int squares_x = inner_x + 1;
     const int squares_y = inner_y + 1;
-    board_width_mm = squares_x * square;
-    board_height_mm = squares_y * square;
+    board_width = squares_x * pixels_per_square;
+    board_height = squares_y * pixels_per_square;
     for (int row = 0; row < squares_y; ++row) {
       for (int column = 0; column < squares_x; ++column) {
         if ((row + column) % 2 == 0) {
-          board_elements << "<rect x=\"" << column * square << "\" y=\"" << row * square
-                         << "\" width=\"" << square << "\" height=\"" << square
+          board_elements << "<rect x=\"" << column * pixels_per_square << "\" y=\""
+                         << row * pixels_per_square << "\" width=\"" << pixels_per_square
+                         << "\" height=\"" << pixels_per_square
                          << "\" fill=\"#000\"/>";
         }
       }
@@ -1042,62 +1025,44 @@ std::string generate_pattern_svg(const val& pattern) {
   } else if (kind == "charuco") {
     const int squares_x = pattern_dimension(pattern, "squaresX");
     const int squares_y = pattern_dimension(pattern, "squaresY");
-    const double square = pattern_length(pattern, "squareLengthMm");
-    const double marker = pattern_length(pattern, "markerLengthMm");
     const bool legacy = pattern["legacyPattern"].as<bool>();
     const std::string dictionary_name = pattern["dictionary"].as<std::string>();
-    board_width_mm = squares_x * square;
-    board_height_mm = squares_y * square;
     cv::aruco::Dictionary dictionary =
         cv::aruco::getPredefinedDictionary(dictionary_type(dictionary_name));
-    validate_charuco_geometry(squares_x, squares_y, square, marker, dictionary);
+    validate_charuco_dictionary(squares_x, squares_y, dictionary);
+    const int marker_modules = dictionary.markerSize + 2;
+    while (((pixels_per_square * 7) / 10) % marker_modules != 0) {
+      pixels_per_square += 10;
+    }
+    board_width = squares_x * pixels_per_square;
+    board_height = squares_y * pixels_per_square;
     cv::aruco::CharucoBoard board(cv::Size(squares_x, squares_y),
-                                  static_cast<float>(square),
-                                  static_cast<float>(marker), dictionary);
+                                  kCharucoSquareLength,
+                                  kCharucoMarkerLength, dictionary);
     board.setLegacyPattern(legacy);
     cv::Mat image;
-    constexpr int pixels_per_square = 80;
-    board.generateImage(cv::Size(squares_x * pixels_per_square,
-                                 squares_y * pixels_per_square),
-                        image, 0, 1);
-    const auto rectangles = merged_black_rectangles(image);
-    const double scale_x = board_width_mm / image.cols;
-    const double scale_y = board_height_mm / image.rows;
-    for (const auto& rectangle : rectangles) {
-      board_elements << "<rect x=\"" << rectangle.x * scale_x << "\" y=\""
-                     << rectangle.y * scale_y << "\" width=\"" << rectangle.width * scale_x
-                     << "\" height=\"" << rectangle.height * scale_y
+    board.generateImage(cv::Size(board_width, board_height), image, 0, 1);
+    for (const auto& rectangle : merged_black_rectangles(image)) {
+      board_elements << "<rect x=\"" << rectangle.x << "\" y=\""
+                     << rectangle.y << "\" width=\"" << rectangle.width
+                     << "\" height=\"" << rectangle.height
                      << "\" fill=\"#000\"/>";
     }
   } else {
     throw std::runtime_error("Unsupported calibration pattern.");
   }
 
-  constexpr double margin = 12.0;
-  const double page_width = std::max(board_width_mm + margin * 2.0, 124.0);
-  const double page_height = board_height_mm + 36.0;
-  const double board_x = (page_width - board_width_mm) / 2.0;
-  const double ruler_x = (page_width - 100.0) / 2.0;
-  const double ruler_y = board_height_mm + 24.0;
+  constexpr int margin = 16;
+  const int page_width = board_width + margin * 2;
+  const int page_height = board_height + margin * 2;
   std::ostringstream svg;
-  svg << std::fixed << std::setprecision(5)
-      << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" << page_width
-      << "mm\" height=\"" << page_height << "mm\" viewBox=\"0 0 " << page_width << ' '
+  svg << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" << page_width
+      << "\" height=\"" << page_height << "\" viewBox=\"0 0 " << page_width << ' '
       << page_height << "\" shape-rendering=\"crispEdges\">"
       << "<rect width=\"100%\" height=\"100%\" fill=\"#fff\"/>"
-      << "<g transform=\"translate(" << board_x << ' ' << margin << ")\">"
-      << "<rect width=\"" << board_width_mm << "\" height=\"" << board_height_mm
+      << "<g transform=\"translate(" << margin << ' ' << margin << ")\">"
+      << "<rect width=\"" << board_width << "\" height=\"" << board_height
       << "\" fill=\"#fff\"/>" << board_elements.str() << "</g>"
-      << "<g stroke=\"#000\" fill=\"#000\" font-family=\"sans-serif\" font-size=\"3\">"
-      << "<line x1=\"" << ruler_x << "\" y1=\"" << ruler_y << "\" x2=\""
-      << ruler_x + 100.0 << "\" y2=\"" << ruler_y << "\" stroke-width=\"0.5\"/>"
-      << "<line x1=\"" << ruler_x << "\" y1=\"" << ruler_y - 2.0 << "\" x2=\""
-      << ruler_x << "\" y2=\"" << ruler_y + 2.0 << "\" stroke-width=\"0.5\"/>"
-      << "<line x1=\"" << ruler_x + 100.0 << "\" y1=\"" << ruler_y - 2.0
-      << "\" x2=\"" << ruler_x + 100.0 << "\" y2=\"" << ruler_y + 2.0
-      << "\" stroke-width=\"0.5\"/>"
-      << "<text x=\"" << page_width / 2.0 << "\" y=\"" << ruler_y + 6.0
-      << "\" text-anchor=\"middle\">100 mm — print at actual size</text></g>"
       << "</svg>";
   return svg.str();
 }
@@ -1116,7 +1081,6 @@ std::string generate_display_pattern_svg(const val& pattern,
   if (kind == "chessboard") {
     const int inner_x = pattern_dimension(pattern, "innerCornersX");
     const int inner_y = pattern_dimension(pattern, "innerCornersY");
-    pattern_length(pattern, "squareLengthMm");
     squares_x = inner_x + 1;
     squares_y = inner_y + 1;
     if (squares_x * square_pixels > 32768 || squares_y * square_pixels > 32768) {
@@ -1134,18 +1098,19 @@ std::string generate_display_pattern_svg(const val& pattern,
   } else if (kind == "charuco") {
     squares_x = pattern_dimension(pattern, "squaresX");
     squares_y = pattern_dimension(pattern, "squaresY");
-    const double square = pattern_length(pattern, "squareLengthMm");
-    const double marker = pattern_length(pattern, "markerLengthMm");
     const bool legacy = pattern["legacyPattern"].as<bool>();
     const std::string dictionary_name = pattern["dictionary"].as<std::string>();
     cv::aruco::Dictionary dictionary =
         cv::aruco::getPredefinedDictionary(dictionary_type(dictionary_name));
-    validate_charuco_geometry(squares_x, squares_y, square, marker, dictionary);
+    validate_charuco_dictionary(squares_x, squares_y, dictionary);
     if (marker_pixels <= 0 || marker_pixels >= square_pixels) {
       throw std::runtime_error("Display marker size must be positive and smaller than a square.");
     }
     if (marker_pixels % (dictionary.markerSize + 2) != 0) {
       throw std::runtime_error("Display marker size must contain complete marker modules.");
+    }
+    if (marker_pixels * 10 != square_pixels * 7) {
+      throw std::runtime_error("Display marker size must be seven tenths of a square.");
     }
     if (squares_x * square_pixels > 32768 || squares_y * square_pixels > 32768) {
       throw std::runtime_error("Display board exceeds the 32768-pixel edge limit.");

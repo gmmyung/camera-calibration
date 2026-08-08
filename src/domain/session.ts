@@ -63,12 +63,11 @@ function isPoint(value: unknown, dimensions: 2 | 3): boolean {
 }
 
 function isPattern(value: unknown): value is PatternConfig {
-  if (!isRecord(value) || !isFiniteNumber(value.squareLengthMm)) return false;
+  if (!isRecord(value)) return false;
   if (value.kind === "charuco") {
     if (
       !isFiniteNumber(value.squaresX) ||
       !isFiniteNumber(value.squaresY) ||
-      !isFiniteNumber(value.markerLengthMm) ||
       typeof value.dictionary !== "string" ||
       !DICTIONARIES.has(value.dictionary) ||
       typeof value.legacyPattern !== "boolean"
@@ -388,21 +387,41 @@ function samePattern(left: unknown, right: unknown): boolean {
   if (left.kind === "chessboard" && right.kind === "chessboard") {
     return (
       left.innerCornersX === right.innerCornersX &&
-      left.innerCornersY === right.innerCornersY &&
-      left.squareLengthMm === right.squareLengthMm
+      left.innerCornersY === right.innerCornersY
     );
   }
   if (left.kind === "charuco" && right.kind === "charuco") {
     return (
       left.squaresX === right.squaresX &&
       left.squaresY === right.squaresY &&
-      left.squareLengthMm === right.squareLengthMm &&
-      left.markerLengthMm === right.markerLengthMm &&
       left.dictionary === right.dictionary &&
       left.legacyPattern === right.legacyPattern
     );
   }
   return false;
+}
+
+function cleanPattern(pattern: PatternConfig): PatternConfig {
+  return pattern.kind === "charuco"
+    ? {
+        kind: "charuco",
+        squaresX: pattern.squaresX,
+        squaresY: pattern.squaresY,
+        dictionary: pattern.dictionary,
+        legacyPattern: pattern.legacyPattern,
+      }
+    : {
+        kind: "chessboard",
+        innerCornersX: pattern.innerCornersX,
+        innerCornersY: pattern.innerCornersY,
+      };
+}
+
+function legacySquareScale(pattern: unknown): number {
+  if (!isRecord(pattern) || !isFiniteNumber(pattern.squareLengthMm) || pattern.squareLengthMm <= 0) {
+    return 1;
+  }
+  return pattern.squareLengthMm;
 }
 
 /** Validates untrusted IndexedDB data before the application uses it. */
@@ -454,5 +473,39 @@ export function parseStoredSession(value: unknown): CalibrationSessionV1 | undef
     return undefined;
   }
   if (value.step === "results" && value.result === undefined) return undefined;
-  return value as unknown as CalibrationSessionV1;
+
+  const session = value as unknown as CalibrationSessionV1;
+  const scale = legacySquareScale(value.pattern);
+  const normalizedObservations = session.observations.map((observation) => ({
+    ...observation,
+    objectPoints: scale === 1
+      ? observation.objectPoints
+      : observation.objectPoints.map((point) => ({
+          x: point.x / scale,
+          y: point.y / scale,
+          z: point.z / scale,
+        })),
+  }));
+  const normalizedResult = session.result
+    ? {
+        ...session.result,
+        board: cleanPattern(session.result.board),
+        poses: scale === 1
+          ? session.result.poses
+          : session.result.poses.map((pose) => ({
+              ...pose,
+              translationVector: pose.translationVector.map((value) => value / scale) as [
+                number,
+                number,
+                number,
+              ],
+            })),
+      }
+    : undefined;
+  return {
+    ...session,
+    pattern: cleanPattern(session.pattern),
+    observations: normalizedObservations,
+    result: normalizedResult,
+  };
 }

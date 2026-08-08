@@ -9,9 +9,9 @@ There is no runtime server. Camera frames, imported images, observations, and re
 - Guided live capture with stability and X/Y/size/skew feedback
 - JPEG, PNG, and WebP import grouped by exact resolution
 - Standard five-coefficient radial/tangential and four-coefficient fisheye models
-- ChArUco and chessboard presets plus custom board definitions
-- Exact-dimension SVG board export with a 100 mm scale
-- Fullscreen display targets with saved monitor specifications and ruler-verified physical scale
+- ChArUco and chessboard presets plus custom row and column counts
+- SVG board export
+- Viewport-fitted fullscreen display boards
 - Robust reprojection-error filtering with reviewable exclusions
 - Point-coverage and residual maps, worst-view overlays, and leave-one-view-out stability
 - Live and independent-image undistortion previews
@@ -44,11 +44,9 @@ The first connection leaves dimensions unset unless the user enters them, allowi
 
 ## Display targets
 
-The browser cannot determine a display's physical dimensions. Display profiles therefore use a diagonal/native-resolution estimate, exact active-panel dimensions, or a published pixel density. The preset list includes common monitors plus iPhone and MacBook panel families. A fullscreen ruler check converts the rendered reference into a measured millimetres-per-pixel scale.
+The display board fills the available browser viewport while preserving complete board squares and marker modules. Fullscreen is requested when available; otherwise it uses the current window.
 
-The initial scale follows the current browser raster and `devicePixelRatio`. macOS scaled modes, iPhone Display Zoom, browser zoom, and compositor resampling can still alter the effective output. Published PPI is therefore an estimate until checked with the ruler. Verified profiles are stored locally and require verification again when either the browser-reported display raster or pixel ratio changes.
-
-Displayed boards are generated on whole device-pixel boundaries. ChArUco marker sides are snapped to complete dictionary modules, and the UI reports the resulting square, marker, and full-board dimensions. A specification-only profile is marked as estimated; ruler-checked profiles are marked as verified.
+Physical square size is not required to solve camera intrinsics. Object points and pose translations use board-square units, so translation values are relative to one square rather than millimetres.
 
 ## Verification
 
@@ -76,7 +74,7 @@ Results use schema version 1 and include:
 - total and per-view reprojection errors
 - point-level reprojection residuals and sampled leave-one-view-out parameter variation
 - included and excluded view identifiers
-- physical target definition and OpenCV/app versions
+- target layout and OpenCV/app versions
 
 A calibration is valid only for the same camera pipeline, resolution, crop, zoom, and focus state. Browsers may provide processed video rather than raw sensor images.
 

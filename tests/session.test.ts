@@ -60,6 +60,25 @@ describe("stored session validation", () => {
     expect(parseStoredSession(session)).toEqual(session);
   });
 
+  it("converts legacy physical coordinates to board-square units", () => {
+    const legacy = {
+      ...session,
+      pattern: { ...CHARUCO_PRESET, squareLengthMm: 30, markerLengthMm: 21 },
+      observations: [{
+        ...observation,
+        objectPoints: observation.objectPoints.map((point) => ({
+          x: point.x * 30,
+          y: point.y * 30,
+          z: point.z * 30,
+        })),
+      }],
+    };
+    const parsed = parseStoredSession(legacy);
+    expect(parsed?.pattern).toEqual(CHARUCO_PRESET);
+    expect(parsed?.observations[0]?.objectPoints).toEqual(observation.objectPoints);
+    expect(parsed?.pattern).not.toHaveProperty("squareLengthMm");
+  });
+
   it("rejects mismatched point arrays and duplicate IDs", () => {
     expect(
       parseStoredSession({
@@ -171,6 +190,29 @@ describe("stored session validation", () => {
     };
     const completed = { ...session, step: "results", observations, result };
     expect(parseStoredSession(completed)).toEqual(completed);
+    const legacyCompleted = {
+      ...completed,
+      pattern: { ...CHARUCO_PRESET, squareLengthMm: 30, markerLengthMm: 21 },
+      observations: observations.map((view) => ({
+        ...view,
+        objectPoints: view.objectPoints.map((point) => ({
+          x: point.x * 30,
+          y: point.y * 30,
+          z: point.z * 30,
+        })),
+      })),
+      result: {
+        ...result,
+        board: { ...CHARUCO_PRESET, squareLengthMm: 30, markerLengthMm: 21 },
+        poses: result.poses.map((pose) => ({
+          ...pose,
+          translationVector: [0, 0, 30],
+        })),
+      },
+    };
+    const normalizedLegacy = parseStoredSession(legacyCompleted);
+    expect(normalizedLegacy?.result?.poses[0]?.translationVector).toEqual([0, 0, 1]);
+    expect(normalizedLegacy?.result?.board).toEqual(CHARUCO_PRESET);
     expect(
       parseStoredSession({
         ...completed,

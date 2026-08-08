@@ -10,7 +10,6 @@ import {
   CHARUCO_PRESET,
   CHESSBOARD_PRESET,
   MAX_PATTERN_GRID_SIZE,
-  MAX_PATTERN_LENGTH_MM,
   clonePattern,
   patternLabel,
   validatePattern,
@@ -56,7 +55,6 @@ import {
   saveActiveSession,
   storageHeadroom,
 } from "../lib/session-db";
-import { clearDisplayProfiles } from "../lib/display-profiles";
 import { createSessionPackage, readSessionPackage } from "../lib/session-package";
 import { WebGlUndistortRenderer } from "../lib/undistort-webgl";
 import { CalibrationWorkerClient } from "../worker/client";
@@ -328,25 +326,9 @@ function PatternEditor({
               max={MAX_PATTERN_GRID_SIZE}
               onChange={(squaresY) => onChange({ ...pattern, squaresY })}
             />
-            <NumberField
-              label="Square size (mm)"
-              value={pattern.squareLengthMm}
-              min={0.1}
-              max={MAX_PATTERN_LENGTH_MM}
-              step={0.1}
-              onChange={(squareLengthMm) => onChange({ ...pattern, squareLengthMm })}
-            />
             <details class="advanced-settings span-two">
               <summary>Advanced ChArUco settings</summary>
               <div class="form-grid">
-                <NumberField
-                  label="Marker size (mm)"
-                  value={pattern.markerLengthMm}
-                  min={0.1}
-                  max={MAX_PATTERN_LENGTH_MM}
-                  step={0.1}
-                  onChange={(markerLengthMm) => onChange({ ...pattern, markerLengthMm })}
-                />
                 <label class="field">
                   <span>Marker dictionary</span>
                   <select
@@ -391,14 +373,6 @@ function PatternEditor({
               min={3}
               max={MAX_PATTERN_GRID_SIZE}
               onChange={(innerCornersY) => onChange({ ...pattern, innerCornersY })}
-            />
-            <NumberField
-              label="Square size (mm)"
-              value={pattern.squareLengthMm}
-              min={0.1}
-              max={MAX_PATTERN_LENGTH_MM}
-              step={0.1}
-              onChange={(squareLengthMm) => onChange({ ...pattern, squareLengthMm })}
             />
           </>
         )}
@@ -1450,7 +1424,6 @@ export function App() {
     setError(undefined);
     try {
       await clearLocalSession();
-      clearDisplayProfiles();
       const nextSession = freshSession();
       skipPristineSaveIdRef.current = nextSession.id;
       setSession(nextSession);
@@ -1464,7 +1437,7 @@ export function App() {
       setImportBusy(false);
       setRestoreCandidate(undefined);
       setRestoreResolved(true);
-      setStatus("Local session and display profiles were deleted.");
+      setStatus("Local session data was deleted.");
     } catch (resetError) {
       setStatus(undefined);
       setError(`Local data could not be deleted: ${errorText(resetError)}`);
@@ -1631,7 +1604,6 @@ export function App() {
           pattern={session.pattern}
           worker={worker}
           workerReady={workerStatus === "ready" && patternErrors.length === 0}
-          onApplyPattern={setPattern}
           onStartCapture={() => setStep("capture")}
         />
       </main>

@@ -190,18 +190,26 @@ assert.match(
       kind: "chessboard",
       innerCornersX: 3.5,
       innerCornersY: 6,
-      squareLengthMm: 24,
     }),
   ),
   /whole number between 3 and 30/,
 );
+const exportedPattern = callNative(() =>
+  module.generatePatternSvg({
+    kind: "charuco",
+    squaresX: 5,
+    squaresY: 7,
+    dictionary: "DICT_5X5_100",
+    legacyPattern: false,
+  }),
+);
+assert.match(exportedPattern, /width="432" height="592"/);
+assert.doesNotMatch(exportedPattern, /millimet|100 mm|actual size|ruler/i);
 const displayPattern = callNative(() =>
   module.generateDisplayPatternSvg({
     kind: "charuco",
     squaresX: 5,
     squaresY: 7,
-    squareLengthMm: 30,
-    markerLengthMm: 21,
     dictionary: "DICT_5X5_100",
     legacyPattern: false,
   }, 150, 105),
@@ -214,8 +222,6 @@ assert.match(
       kind: "charuco",
       squaresX: 5,
       squaresY: 7,
-      squareLengthMm: 30,
-      markerLengthMm: 21,
       dictionary: "DICT_5X5_100",
       legacyPattern: false,
     }, 150, 150),
@@ -228,8 +234,6 @@ assert.match(
       kind: "charuco",
       squaresX: 5,
       squaresY: 7,
-      squareLengthMm: 30,
-      markerLengthMm: 21,
       dictionary: "DICT_5X5_100",
       legacyPattern: false,
     }, 150, 106),
@@ -238,11 +242,22 @@ assert.match(
 );
 assert.match(
   nativeError(() =>
+    module.generateDisplayPatternSvg({
+      kind: "charuco",
+      squaresX: 5,
+      squaresY: 7,
+      dictionary: "DICT_5X5_100",
+      legacyPattern: false,
+    }, 150, 112),
+  ),
+  /seven tenths of a square/,
+);
+assert.match(
+  nativeError(() =>
     module.detectFrame(new Uint8Array(4), 10_000, 10_000, {
       kind: "chessboard",
       innerCornersX: 9,
       innerCornersY: 6,
-      squareLengthMm: 24,
     }),
   ),
   /20-megapixel native processing limit/,

@@ -22,7 +22,6 @@ function calibration(
       kind: "chessboard",
       innerCornersX: 9,
       innerCornersY: 6,
-      squareLengthMm: 24,
     },
     poses: [],
   };
