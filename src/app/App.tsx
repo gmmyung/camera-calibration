@@ -22,6 +22,7 @@ import {
   type CalibrationResultV1,
   type CalibrationSessionV1,
   type CameraSettingsSnapshot,
+  type CorrectedPreviewMode,
   type DetectionResult,
   type FrameObservation,
   type ImageSize,
@@ -479,7 +480,7 @@ function ResultMatrix({ result }: { result: CalibrationResultV1 }) {
   );
 }
 
-function LiveResultPreview({
+export function LiveResultPreview({
   stream,
   result,
   worker,
@@ -490,8 +491,16 @@ function LiveResultPreview({
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [corrected, setCorrected] = useState(true);
+  const [previewMode, setPreviewMode] = useState<"original" | CorrectedPreviewMode>(
+    result.model === "fisheye-kb4" ? "fill" : "full",
+  );
   const [previewError, setPreviewError] = useState<string>();
+  const corrected = previewMode !== "original";
+  const correctedMode = previewMode === "fill" ? "fill" : "full";
+
+  useEffect(() => {
+    setPreviewMode(result.model === "fisheye-kb4" ? "fill" : "full");
+  }, [result.createdAt, result.model]);
 
   useEffect(() => {
     if (videoRef.current) videoRef.current.srcObject = stream ?? null;
@@ -525,7 +534,7 @@ function LiveResultPreview({
           video.currentTime !== lastVideoTime
         ) {
           try {
-            gpuRenderer?.render(video, result);
+            gpuRenderer?.render(video, result, correctedMode);
             lastVideoTime = video.currentTime;
           } catch (error) {
             cancelled = true;
@@ -575,7 +584,7 @@ function LiveResultPreview({
       inFlight = true;
       try {
         const bitmap = await createImageBitmap(video);
-        const frame = await worker.undistort(bitmap, result);
+        const frame = await worker.undistort(bitmap, result, correctedMode);
         if (!cancelled) {
           if (canvas.width !== frame.width || canvas.height !== frame.height) {
             canvas.width = frame.width;
@@ -604,15 +613,22 @@ function LiveResultPreview({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [stream, worker, result, corrected]);
+  }, [stream, worker, result, corrected, correctedMode]);
 
   return (
     <section class="panel">
       <div class="panel-heading">
         <h2>Preview</h2>
-        <div class="segmented">
-          <button type="button" class={!corrected ? "selected" : ""} aria-pressed={!corrected} onClick={() => setCorrected(false)}>Original</button>
-          <button type="button" class={corrected ? "selected" : ""} aria-pressed={corrected} onClick={() => setCorrected(true)}>Corrected</button>
+        <div class="segmented" role="group" aria-label="Preview mode">
+          <button type="button" class={previewMode === "original" ? "selected" : ""} aria-pressed={previewMode === "original"} onClick={() => setPreviewMode("original")}>Original</button>
+          {result.model === "fisheye-kb4" ? (
+            <>
+              <button type="button" class={previewMode === "full" ? "selected" : ""} aria-pressed={previewMode === "full"} onClick={() => setPreviewMode("full")}>Full view</button>
+              <button type="button" class={previewMode === "fill" ? "selected" : ""} aria-pressed={previewMode === "fill"} onClick={() => setPreviewMode("fill")}>Fill view</button>
+            </>
+          ) : (
+            <button type="button" class={corrected ? "selected" : ""} aria-pressed={corrected} onClick={() => setPreviewMode("full")}>Corrected</button>
+          )}
         </div>
       </div>
       {stream ? (

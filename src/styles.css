@@ -141,6 +141,7 @@ main { flex: 1; padding: 28px 0 48px; }
   gap: 16px;
   margin-bottom: 14px;
 }
+.panel-heading-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .setup-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -183,6 +184,7 @@ main { flex: 1; padding: 28px 0 48px; }
 }
 .segmented button:first-child { border-left: 0; }
 .segmented button.selected { background: var(--accent-bg); color: var(--accent-text); }
+.segmented button:disabled { opacity: .4; cursor: not-allowed; }
 .board-type {
   display: flex;
   align-items: center;

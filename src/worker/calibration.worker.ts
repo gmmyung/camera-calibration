@@ -142,6 +142,7 @@ context.addEventListener("message", async (event: MessageEvent<WorkerRequest>) =
           pixels.width,
           pixels.height,
           request.calibration,
+          request.previewMode,
         );
         if (!native.ok) throw new Error(native.error || "OpenCV could not undistort the frame.");
         if (

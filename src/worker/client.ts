@@ -1,5 +1,6 @@
 import type {
   CalibrationResultV1,
+  CorrectedPreviewMode,
   FrameObservation,
   ImageSize,
   LensModel,
@@ -44,8 +45,9 @@ export class CalibrationWorkerClient {
   }
 
   async initialize(): Promise<string> {
-    const moduleUrl = new URL("wasm/calibration.js", document.baseURI).href;
-    const response = await this.request({ type: "INIT", moduleUrl });
+    const moduleUrl = new URL("wasm/calibration.js", document.baseURI);
+    moduleUrl.searchParams.set("v", __BUILD_ID__);
+    const response = await this.request({ type: "INIT", moduleUrl: moduleUrl.href });
     if (response.type !== "INIT") throw new Error("Unexpected worker response.");
     return response.opencvVersion;
   }
@@ -82,10 +84,11 @@ export class CalibrationWorkerClient {
   async undistort(
     bitmap: ImageBitmap,
     calibration: CalibrationResultV1,
+    previewMode: CorrectedPreviewMode = "full",
   ): Promise<UndistortedFrame> {
     try {
       const response = await this.request(
-        { type: "UNDISTORT_FRAME", bitmap, calibration },
+        { type: "UNDISTORT_FRAME", bitmap, calibration, previewMode },
         [bitmap],
       );
       if (response.type !== "UNDISTORT_FRAME") throw new Error("Unexpected worker response.");

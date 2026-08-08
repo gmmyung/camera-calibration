@@ -1,4 +1,4 @@
-import type { CalibrationResultV1 } from "../domain/types";
+import type { CalibrationResultV1, CorrectedPreviewMode } from "../domain/types";
 
 const VERTEX_SHADER = `#version 300 es
 precision highp float;
@@ -112,6 +112,7 @@ export interface FrameCalibrationUniforms {
 
 function estimateFisheyePreviewMatrix(
   result: CalibrationResultV1,
+  previewMode: CorrectedPreviewMode,
 ): CalibrationResultV1["cameraMatrix"] {
   const width = result.imageSize.width;
   const height = result.imageSize.height;
@@ -178,15 +179,17 @@ function estimateFisheyePreviewMatrix(
   const maxX = Math.max(...adjustedPoints.map(([x]) => x));
   const minY = Math.min(...adjustedPoints.map(([, y]) => y));
   const maxY = Math.max(...adjustedPoints.map(([, y]) => y));
-  const focalLength = Math.min(
+  const focalLengths = [
     (width * 0.5) / (centerX - minX),
     (width * 0.5) / (maxX - centerX),
     (height * 0.5 * aspectRatio) / (centerY - minY),
     (height * 0.5 * aspectRatio) / (maxY - centerY),
-  );
+  ];
+  const focalLength =
+    previewMode === "fill" ? Math.max(...focalLengths) : Math.min(...focalLengths);
   const outputFy = focalLength / aspectRatio;
-  const outputCx = -centerX * focalLength + width * 0.5;
-  const outputCy = (-centerY * focalLength + height * aspectRatio * 0.5) / aspectRatio;
+  const outputCx = width * 0.5;
+  const outputCy = height * 0.5;
   if (![focalLength, outputFy, outputCx, outputCy].every(Number.isFinite) || focalLength <= 0 || outputFy <= 0) {
     throw new Error("The calibration cannot produce a fisheye preview matrix.");
   }
@@ -197,6 +200,7 @@ export function frameCalibrationUniforms(
   result: CalibrationResultV1,
   width: number,
   height: number,
+  previewMode: CorrectedPreviewMode = "full",
 ): FrameCalibrationUniforms {
   if (width <= 0 || height <= 0 || result.imageSize.width <= 0 || result.imageSize.height <= 0) {
     throw new Error("The undistortion preview has invalid image dimensions.");
@@ -235,13 +239,17 @@ export function frameCalibrationUniforms(
     throw new Error("Fisheye preview requires four distortion coefficients.");
   }
   const source = scaledIntrinsics(result.cameraMatrix);
-  const output = scaledIntrinsics(
-    result.model === "fisheye-kb4" && result.previewCameraMatrix
-      ? result.previewCameraMatrix
-      : result.model === "fisheye-kb4"
-        ? estimateFisheyePreviewMatrix(result)
-        : result.cameraMatrix,
-  );
+  let outputMatrix = result.cameraMatrix;
+  if (result.model === "fisheye-kb4") {
+    outputMatrix =
+      (previewMode === "fill"
+        ? result.previewFillCameraMatrix
+        : result.previewCameraMatrix) ?? estimateFisheyePreviewMatrix(result, previewMode);
+    outputMatrix = [...outputMatrix] as CalibrationResultV1["cameraMatrix"];
+    outputMatrix[2] = result.imageSize.width * 0.5;
+    outputMatrix[5] = result.imageSize.height * 0.5;
+  }
+  const output = scaledIntrinsics(outputMatrix);
   if (result.model === "pinhole-radtan5") {
     return {
       sourceFocalLength: source.focalLength,
@@ -422,7 +430,11 @@ export class WebGlUndistortRenderer {
     return gl ? new WebGlUndistortRenderer(canvas, gl) : undefined;
   }
 
-  render(video: HTMLVideoElement, result: CalibrationResultV1): void {
+  render(
+    video: HTMLVideoElement,
+    result: CalibrationResultV1,
+    previewMode: CorrectedPreviewMode = "full",
+  ): void {
     if (this.disposed) throw new Error("The WebGL preview renderer was disposed.");
     const sourceWidth = video.videoWidth;
     const sourceHeight = video.videoHeight;
@@ -439,7 +451,12 @@ export class WebGlUndistortRenderer {
       this.canvas.height = canvasHeight;
     }
 
-    const calibration = frameCalibrationUniforms(result, sourceWidth, sourceHeight);
+    const calibration = frameCalibrationUniforms(
+      result,
+      sourceWidth,
+      sourceHeight,
+      previewMode,
+    );
     const gl = this.gl;
     gl.viewport(0, 0, canvasWidth, canvasHeight);
     gl.useProgram(this.program);

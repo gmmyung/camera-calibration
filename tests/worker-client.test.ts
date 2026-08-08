@@ -41,6 +41,25 @@ describe("calibration worker client", () => {
     await client.dispose();
   });
 
+  it("cache-keys the native module URL with the current build", async () => {
+    const worker = new FakeWorker();
+    const client = clientFor(worker);
+    const pending = client.initialize();
+    const request = worker.messages[0] as { id: number; type: string; moduleUrl: string };
+    const moduleUrl = new URL(request.moduleUrl);
+    expect(request.type).toBe("INIT");
+    expect(moduleUrl.pathname).toMatch(/\/wasm\/calibration\.js$/);
+    expect(moduleUrl.searchParams.get("v")).toBe("0.1.0");
+    worker.respond({
+      id: request.id,
+      ok: true,
+      type: "INIT",
+      opencvVersion: "4.13.0",
+    });
+    await expect(pending).resolves.toBe("4.13.0");
+    await client.dispose();
+  });
+
   it("requests a device-pixel-aligned display pattern", async () => {
     const worker = new FakeWorker();
     const client = clientFor(worker);
@@ -63,6 +82,27 @@ describe("calibration worker client", () => {
       svg: "<svg width=\"750\"/>",
     });
     await expect(pending).resolves.toContain("750");
+    await client.dispose();
+  });
+
+  it("passes the corrected preview mode to the worker", async () => {
+    const worker = new FakeWorker();
+    const client = clientFor(worker);
+    const bitmap = { close: vi.fn() } as unknown as ImageBitmap;
+    const calibration = { model: "fisheye-kb4" } as Parameters<
+      CalibrationWorkerClient["undistort"]
+    >[1];
+    const pending = client.undistort(bitmap, calibration, "fill");
+    const request = worker.messages[0] as { id: number; type: string; previewMode: string };
+    expect(request).toMatchObject({ type: "UNDISTORT_FRAME", previewMode: "fill" });
+    worker.respond({
+      id: request.id,
+      ok: true,
+      type: "UNDISTORT_FRAME",
+      frame: { width: 1, height: 1, rgba: new Uint8ClampedArray(4) },
+    });
+    await expect(pending).resolves.toMatchObject({ width: 1, height: 1 });
+    expect(bitmap.close).toHaveBeenCalledOnce();
     await client.dispose();
   });
 

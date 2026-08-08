@@ -133,6 +133,8 @@ export interface CalibrationStability {
   maxAbsoluteDeltas: number[];
 }
 
+export type CorrectedPreviewMode = "full" | "fill";
+
 export interface CalibrationResultV1 {
   schemaVersion: 1;
   generator: {
@@ -143,7 +145,10 @@ export interface CalibrationResultV1 {
   model: LensModel;
   imageSize: ImageSize;
   cameraMatrix: [number, number, number, number, number, number, number, number, number];
+  /** Centered fisheye projection that retains the widest corrected field of view. */
   previewCameraMatrix?: [number, number, number, number, number, number, number, number, number];
+  /** Centered fisheye projection that crops invalid borders. */
+  previewFillCameraMatrix?: [number, number, number, number, number, number, number, number, number];
   distortion: number[];
   rmsReprojectionError: number;
   perViewErrors: Record<string, number>;

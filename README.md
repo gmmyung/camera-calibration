@@ -56,7 +56,7 @@ npm run test:wasm
 npm run build
 ```
 
-The WebAssembly build is intentionally single-threaded. This keeps the application compatible with ordinary GitHub Pages hosting without requiring cross-origin isolation headers. Detection runs in a dedicated module worker, and frames are downscaled to a maximum 1920-pixel working edge. The corrected live preview runs in WebGL2 at the camera frame cadence, with the OpenCV worker retained as a fallback. Fisheye previews use OpenCV's full-field (`balance = 1`) projection matrix.
+The WebAssembly build is intentionally single-threaded. This keeps the application compatible with ordinary GitHub Pages hosting without requiring cross-origin isolation headers. Detection runs in a dedicated module worker, and frames are downscaled to a maximum 1920-pixel working edge. The corrected live preview runs in WebGL2 at the camera frame cadence, with the OpenCV worker retained as a fallback. Fisheye previews provide centered Full (`balance = 1`) and Fill (`balance = 0`) projections; Fill is the default.
 
 ## GitHub Pages
 

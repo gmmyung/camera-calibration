@@ -1,5 +1,6 @@
 import type {
   CalibrationResultV1,
+  CorrectedPreviewMode,
   DetectionResult,
   FrameObservation,
   ImageSize,
@@ -24,6 +25,7 @@ export type WorkerRequest =
       type: "UNDISTORT_FRAME";
       bitmap: ImageBitmap;
       calibration: CalibrationResultV1;
+      previewMode: CorrectedPreviewMode;
     }
   | { id: number; type: "GENERATE_PATTERN_SVG"; pattern: PatternConfig }
   | {

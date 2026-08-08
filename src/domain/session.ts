@@ -323,6 +323,10 @@ function isCalibrationResult(
       (!isNumberArray(value.previewCameraMatrix, 9) ||
         value.previewCameraMatrix[0]! <= 0 ||
         value.previewCameraMatrix[4]! <= 0)) ||
+    (value.previewFillCameraMatrix !== undefined &&
+      (!isNumberArray(value.previewFillCameraMatrix, 9) ||
+        value.previewFillCameraMatrix[0]! <= 0 ||
+        value.previewFillCameraMatrix[4]! <= 0)) ||
     !isNumberArray(value.distortion, expectedDistortion) ||
     !isNonNegativeNumber(value.rmsReprojectionError) ||
     !isRecord(value.perViewErrors) ||

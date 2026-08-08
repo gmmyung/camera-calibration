@@ -735,6 +735,25 @@ int failed_fisheye_view(const cv::Exception& error) {
   return -1;
 }
 
+cv::Mat centered_fisheye_preview_matrix(const cv::Mat& camera_matrix,
+                                         const cv::Mat& distortion,
+                                         const cv::Size& image_size,
+                                         double balance) {
+  cv::Mat preview_camera_matrix;
+  cv::fisheye::estimateNewCameraMatrixForUndistortRectify(
+      camera_matrix, distortion, image_size, cv::Matx33d::eye(),
+      preview_camera_matrix, balance, image_size);
+  if (preview_camera_matrix.rows != 3 || preview_camera_matrix.cols != 3 ||
+      preview_camera_matrix.type() != CV_64F || !cv::checkRange(preview_camera_matrix) ||
+      preview_camera_matrix.at<double>(0, 0) <= 0.0 ||
+      preview_camera_matrix.at<double>(1, 1) <= 0.0) {
+    throw std::runtime_error("OpenCV returned an invalid fisheye preview matrix.");
+  }
+  preview_camera_matrix.at<double>(0, 2) = image_size.width * 0.5;
+  preview_camera_matrix.at<double>(1, 2) = image_size.height * 0.5;
+  return preview_camera_matrix;
+}
+
 val solve_calibration(const val& input,
                       const std::string& model,
                       int width,
@@ -800,19 +819,17 @@ val solve_calibration(const val& input,
   result.set("cameraMatrix", number_array(camera_matrix));
   result.set("distortion", number_array(distortion));
   if (model == "fisheye-kb4") {
-    cv::Mat preview_camera_matrix;
-    cv::fisheye::estimateNewCameraMatrixForUndistortRectify(
-        state.camera_matrix, state.distortion, cv::Size(width, height), cv::Matx33d::eye(),
-        preview_camera_matrix, 1.0, cv::Size(width, height));
-    if (preview_camera_matrix.rows != 3 || preview_camera_matrix.cols != 3 ||
-        preview_camera_matrix.type() != CV_64F || !cv::checkRange(preview_camera_matrix) ||
-        preview_camera_matrix.at<double>(0, 0) <= 0.0 ||
-        preview_camera_matrix.at<double>(1, 1) <= 0.0) {
-      throw std::runtime_error("OpenCV returned an invalid fisheye preview matrix.");
-    }
+    const cv::Size image_size(width, height);
+    cv::Mat preview_camera_matrix = centered_fisheye_preview_matrix(
+        state.camera_matrix, state.distortion, image_size, 1.0);
+    cv::Mat preview_fill_camera_matrix = centered_fisheye_preview_matrix(
+        state.camera_matrix, state.distortion, image_size, 0.0);
     std::vector<double> preview_matrix(preview_camera_matrix.begin<double>(),
                                        preview_camera_matrix.end<double>());
+    std::vector<double> preview_fill_matrix(preview_fill_camera_matrix.begin<double>(),
+                                            preview_fill_camera_matrix.end<double>());
     result.set("previewCameraMatrix", number_array(preview_matrix));
+    result.set("previewFillCameraMatrix", number_array(preview_fill_matrix));
   }
   result.set("rmsReprojectionError", state.rms);
 
@@ -931,7 +948,8 @@ cv::Mat distortion_from_result(const val& calibration, int expected_length) {
 val undistort_frame(const val& rgba,
                     int width,
                     int height,
-                    const val& calibration) {
+                    const val& calibration,
+                    const std::string& preview_mode) {
   std::vector<unsigned char> bytes = copy_bytes(rgba, checked_image_byte_count(width, height));
   cv::Mat source(height, width, CV_8UC4, bytes.data());
   cv::Mat output;
@@ -939,20 +957,17 @@ val undistort_frame(const val& rgba,
   const int expected_distortion =
       model == "pinhole-radtan5" ? 5 : model == "fisheye-kb4" ? 4 : 0;
   if (expected_distortion == 0) throw std::runtime_error("Unsupported lens model.");
+  if (preview_mode != "full" && preview_mode != "fill") {
+    throw std::runtime_error("Unsupported corrected preview mode.");
+  }
   cv::Mat camera_matrix = camera_matrix_from_result(calibration, width, height);
   cv::Mat distortion = distortion_from_result(calibration, expected_distortion);
   if (model == "pinhole-radtan5") {
     cv::undistort(source, output, camera_matrix, distortion, camera_matrix);
   } else if (model == "fisheye-kb4") {
-    cv::Mat preview_camera_matrix;
-    cv::fisheye::estimateNewCameraMatrixForUndistortRectify(
-        camera_matrix, distortion, cv::Size(width, height), cv::Matx33d::eye(),
-        preview_camera_matrix, 1.0, cv::Size(width, height));
-    if (!cv::checkRange(preview_camera_matrix) ||
-        preview_camera_matrix.at<double>(0, 0) <= 0.0 ||
-        preview_camera_matrix.at<double>(1, 1) <= 0.0) {
-      throw std::runtime_error("OpenCV returned an invalid fisheye preview matrix.");
-    }
+    cv::Mat preview_camera_matrix = centered_fisheye_preview_matrix(
+        camera_matrix, distortion, cv::Size(width, height),
+        preview_mode == "fill" ? 0.0 : 1.0);
     cv::fisheye::undistortImage(source, output, camera_matrix, distortion,
                                 preview_camera_matrix, cv::Size(width, height));
   }

@@ -4,6 +4,9 @@ import preact from "@preact/preset-vite";
 export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(process.env.npm_package_version ?? "0.1.0"),
+    __BUILD_ID__: JSON.stringify(
+      process.env.GITHUB_SHA?.slice(0, 12) ?? process.env.npm_package_version ?? "development",
+    ),
   },
   base: "./",
   plugins: [preact()],

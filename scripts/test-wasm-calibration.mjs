@@ -139,6 +139,14 @@ assert.equal(result.previewCameraMatrix.length, 9);
 assert.equal(result.previewCameraMatrix.every(Number.isFinite), true);
 assert.ok(result.previewCameraMatrix[0] > 0);
 assert.ok(result.previewCameraMatrix[4] > 0);
+assert.equal(result.previewCameraMatrix[2], width * 0.5);
+assert.equal(result.previewCameraMatrix[5], height * 0.5);
+assert.equal(result.previewFillCameraMatrix.length, 9);
+assert.equal(result.previewFillCameraMatrix.every(Number.isFinite), true);
+assert.ok(result.previewFillCameraMatrix[0] >= result.previewCameraMatrix[0]);
+assert.ok(result.previewFillCameraMatrix[4] >= result.previewCameraMatrix[4]);
+assert.equal(result.previewFillCameraMatrix[2], width * 0.5);
+assert.equal(result.previewFillCameraMatrix[5], height * 0.5);
 assert.equal(Object.keys(result.residuals).length, validViews.length);
 for (const view of validViews) {
   assert.equal(result.residuals[view.id].length, objectPoints.length);
@@ -168,7 +176,7 @@ const preview = callNative(() =>
     imageSize: { width, height },
     cameraMatrix: result.cameraMatrix,
     distortion: result.distortion,
-  }),
+  }, "fill"),
 );
 assert.equal(preview.ok, true);
 assert.equal(preview.width, width);

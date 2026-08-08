@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import type { CalibrationResultV1 } from "../domain/types";
+import type { CalibrationResultV1, CorrectedPreviewMode } from "../domain/types";
 import { decodeImage } from "../lib/images";
 import type { CalibrationWorkerClient } from "../worker/client";
 
@@ -27,8 +27,15 @@ export function ValidationImagePreview({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [file, setFile] = useState<File>();
   const [sourceUrl, setSourceUrl] = useState<string>();
+  const [previewMode, setPreviewMode] = useState<CorrectedPreviewMode>(
+    result.model === "fisheye-kb4" ? "fill" : "full",
+  );
   const [busy, setBusy] = useState(false);
   const [previewError, setPreviewError] = useState<string>();
+
+  useEffect(() => {
+    setPreviewMode(result.model === "fisheye-kb4" ? "fill" : "full");
+  }, [result.createdAt, result.model]);
 
   useEffect(() => {
     if (!file) {
@@ -58,7 +65,7 @@ export function ValidationImagePreview({
             `Validation image is ${dimensions}; use ${result.imageSize.width} × ${result.imageSize.height}.`,
           );
         }
-        return worker.undistort(bitmap, result);
+        return worker.undistort(bitmap, result, previewMode);
       })
       .then((frame) => {
         if (cancelled) return;
@@ -82,7 +89,7 @@ export function ValidationImagePreview({
     return () => {
       cancelled = true;
     };
-  }, [file, result, worker]);
+  }, [file, previewMode, result, worker]);
 
   const chooseFile = (candidate?: File) => {
     if (!candidate) return;
@@ -98,19 +105,27 @@ export function ValidationImagePreview({
     <section class="panel full-width validation-panel" aria-busy={busy}>
       <div class="panel-heading">
         <h2>Validation image</h2>
-        <label class={`button secondary file-button${busy || !worker ? " disabled" : ""}`}>
-          {busy ? "Processing…" : file ? "Choose another image" : "Choose image"}
-          <input
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            disabled={busy || !worker}
-            onChange={(event) => {
-              const input = event.currentTarget;
-              chooseFile(input.files?.[0]);
-              input.value = "";
-            }}
-          />
-        </label>
+        <div class="panel-heading-actions">
+          {result.model === "fisheye-kb4" && (
+            <div class="segmented" role="group" aria-label="Validation correction view">
+              <button type="button" disabled={busy} class={previewMode === "full" ? "selected" : ""} aria-pressed={previewMode === "full"} onClick={() => setPreviewMode("full")}>Full view</button>
+              <button type="button" disabled={busy} class={previewMode === "fill" ? "selected" : ""} aria-pressed={previewMode === "fill"} onClick={() => setPreviewMode("fill")}>Fill view</button>
+            </div>
+          )}
+          <label class={`button secondary file-button${busy || !worker ? " disabled" : ""}`}>
+            {busy ? "Processing…" : file ? "Choose another image" : "Choose image"}
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              disabled={busy || !worker}
+              onChange={(event) => {
+                const input = event.currentTarget;
+                chooseFile(input.files?.[0]);
+                input.value = "";
+              }}
+            />
+          </label>
+        </div>
       </div>
       {file ? (
         <div class="validation-grid">
@@ -124,7 +139,9 @@ export function ValidationImagePreview({
           </figure>
           <figure>
             <canvas ref={canvasRef} style={{ aspectRatio }} />
-            <figcaption>Corrected</figcaption>
+            <figcaption>
+              Corrected{result.model === "fisheye-kb4" ? ` · ${previewMode === "fill" ? "Fill" : "Full"}` : ""}
+            </figcaption>
           </figure>
         </div>
       ) : (

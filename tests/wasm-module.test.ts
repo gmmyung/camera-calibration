@@ -122,10 +122,11 @@ describe("native calibration result validation", () => {
     ).toThrow("invalid reprojection error");
   });
 
-  it("requires a finite full-field projection for fisheye previews", () => {
+  it("requires finite full and fill projections for fisheye previews", () => {
     const fisheye = nativeResult({
       distortion: [-0.1, 0.01, 0, 0],
       previewCameraMatrix: [500, 0, 640, 0, 500, 360, 0, 0, 1],
+      previewFillCameraMatrix: [700, 0, 640, 0, 700, 360, 0, 0, 1],
       stability: undefined,
     });
     const result = calibrationResultFromNative(
@@ -136,6 +137,7 @@ describe("native calibration result validation", () => {
       observations,
     );
     expect(result.previewCameraMatrix).toEqual(fisheye.previewCameraMatrix);
+    expect(result.previewFillCameraMatrix).toEqual(fisheye.previewFillCameraMatrix);
 
     expect(() =>
       calibrationResultFromNative(

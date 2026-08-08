@@ -1,6 +1,7 @@
 import type {
   CalibrationStability,
   CalibrationResultV1,
+  CorrectedPreviewMode,
   DetectionResult,
   FrameObservation,
   ImageSize,
@@ -15,6 +16,7 @@ export interface NativeCalibrationResult {
   opencvVersion: string;
   cameraMatrix: number[];
   previewCameraMatrix?: number[];
+  previewFillCameraMatrix?: number[];
   distortion: number[];
   rmsReprojectionError: number;
   perViewErrors: Record<string, number>;
@@ -54,6 +56,7 @@ export interface CalibrationWasmModule {
     width: number,
     height: number,
     calibration: CalibrationResultV1,
+    previewMode: CorrectedPreviewMode,
   ): NativeUndistortedFrame;
   generatePatternSvg(pattern: PatternConfig): string;
   generateDisplayPatternSvg(
@@ -69,6 +72,7 @@ type CalibrationModuleFactory = (options: {
 }) => Promise<CalibrationWasmModule>;
 
 export async function loadCalibrationModule(moduleUrl: string): Promise<CalibrationWasmModule> {
+  const moduleLocation = new URL(moduleUrl);
   const imported = (await import(/* @vite-ignore */ moduleUrl)) as {
     default?: CalibrationModuleFactory;
   };
@@ -77,7 +81,11 @@ export async function loadCalibrationModule(moduleUrl: string): Promise<Calibrat
   }
   return imported.default({
     noInitialRun: true,
-    locateFile: (path) => new URL(path, moduleUrl).href,
+    locateFile: (path) => {
+      const fileUrl = new URL(path, moduleLocation);
+      fileUrl.search = moduleLocation.search;
+      return fileUrl.href;
+    },
   });
 }
 
@@ -239,7 +247,10 @@ export function calibrationResultFromNative(
     model === "fisheye-kb4" &&
     (!finiteArray(native.previewCameraMatrix, 9) ||
       native.previewCameraMatrix[0]! <= 0 ||
-      native.previewCameraMatrix[4]! <= 0)
+      native.previewCameraMatrix[4]! <= 0 ||
+      !finiteArray(native.previewFillCameraMatrix, 9) ||
+      native.previewFillCameraMatrix[0]! <= 0 ||
+      native.previewFillCameraMatrix[4]! <= 0)
   ) {
     throw new Error("OpenCV returned an invalid fisheye preview matrix.");
   }
@@ -336,6 +347,10 @@ export function calibrationResultFromNative(
     previewCameraMatrix:
       model === "fisheye-kb4"
         ? (native.previewCameraMatrix as CalibrationResultV1["previewCameraMatrix"])
+        : undefined,
+    previewFillCameraMatrix:
+      model === "fisheye-kb4"
+        ? (native.previewFillCameraMatrix as CalibrationResultV1["previewFillCameraMatrix"])
         : undefined,
     distortion: native.distortion,
     rmsReprojectionError: native.rmsReprojectionError,

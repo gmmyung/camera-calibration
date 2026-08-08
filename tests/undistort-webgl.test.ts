@@ -51,17 +51,19 @@ describe("WebGL undistortion uniforms", () => {
   it("passes all four fisheye coefficients to the shader", () => {
     const result = calibration("fisheye-kb4", [0.01, -0.02, 0.003, -0.0004]);
     result.previewCameraMatrix = [700, 0, 620, 0, 680, 350, 0, 0, 1];
+    result.previewFillCameraMatrix = [900, 0, 620, 0, 880, 350, 0, 0, 1];
     const uniforms = frameCalibrationUniforms(
       result,
       640,
       360,
+      "full",
     );
 
     expect(uniforms).toMatchObject({
       sourceFocalLength: [500, 450],
       sourcePrincipalPoint: [320, 180],
       outputFocalLength: [350, 340],
-      outputPrincipalPoint: [310, 175],
+      outputPrincipalPoint: [320, 180],
       distortion: [0.01, -0.02, 0.003, -0.0004],
       radialK3: 0,
       lensModel: 1,
@@ -69,15 +71,17 @@ describe("WebGL undistortion uniforms", () => {
   });
 
   it("derives a full-field fisheye projection for older saved results", () => {
-    const uniforms = frameCalibrationUniforms(
-      calibration("fisheye-kb4", [0.01, -0.02, 0.003, -0.0004]),
-      1280,
-      720,
-    );
+    const result = calibration("fisheye-kb4", [0.01, -0.02, 0.003, -0.0004]);
+    const full = frameCalibrationUniforms(result, 1280, 720, "full");
+    const fill = frameCalibrationUniforms(result, 1280, 720, "fill");
 
-    expect(uniforms.outputFocalLength[0]).toBeGreaterThan(0);
-    expect(uniforms.outputFocalLength[1]).toBeGreaterThan(0);
-    expect(uniforms.outputFocalLength).not.toEqual(uniforms.sourceFocalLength);
+    expect(full.outputFocalLength[0]).toBeGreaterThan(0);
+    expect(full.outputFocalLength[1]).toBeGreaterThan(0);
+    expect(full.outputFocalLength).not.toEqual(full.sourceFocalLength);
+    expect(full.outputPrincipalPoint).toEqual([640, 360]);
+    expect(fill.outputPrincipalPoint).toEqual([640, 360]);
+    expect(fill.outputFocalLength[0]).toBeGreaterThan(full.outputFocalLength[0]);
+    expect(fill.outputFocalLength[1]).toBeGreaterThan(full.outputFocalLength[1]);
   });
 
   it("rejects coefficient counts that do not match the model", () => {
