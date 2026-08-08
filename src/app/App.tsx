@@ -669,6 +669,8 @@ export function App() {
   const [importGroups, setImportGroups] = useState<ImageFileGroup[]>([]);
   const [importBusy, setImportBusy] = useState(false);
   const [sessionPackageBusy, setSessionPackageBusy] = useState(false);
+  const [newSessionPrompt, setNewSessionPrompt] = useState(false);
+  const [newSessionBusy, setNewSessionBusy] = useState(false);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("json");
   const [solving, setSolving] = useState(false);
   const [cameraBusy, setCameraBusy] = useState(false);
@@ -680,6 +682,7 @@ export function App() {
   const captureBusyRef = useRef(false);
   const cameraBusyRef = useRef(false);
   const importBusyRef = useRef(false);
+  const newSessionBusyRef = useRef(false);
   const sessionGenerationRef = useRef(0);
   const skipPristineSaveIdRef = useRef<string | undefined>(session.id);
   const saveTimerRef = useRef<number>();
@@ -1439,6 +1442,57 @@ export function App() {
     }
   }, [sessionPackageBusy]);
 
+  const startNewSession = useCallback(async () => {
+    if (newSessionBusyRef.current) return;
+    newSessionBusyRef.current = true;
+    setNewSessionBusy(true);
+    setError(undefined);
+    sessionGenerationRef.current += 1;
+    clearTimeout(saveTimerRef.current);
+    try {
+      await clearLocalSession();
+      const previous = sessionRef.current;
+      let activeSettings: CameraSettingsSnapshot | undefined;
+      if (cameraRef.current.currentStream()) {
+        try {
+          activeSettings = cameraRef.current.settings();
+        } catch {
+          // An ended stream will be handled by the track listener.
+        }
+      }
+      const nextSession: CalibrationSessionV1 = {
+        ...freshSession(),
+        lensModel: previous.lensModel,
+        pattern: clonePattern(previous.pattern),
+        captureSettings: activeSettings,
+        imageSize: activeSettings,
+      };
+      skipPristineSaveIdRef.current = nextSession.id;
+      captureBusyRef.current = false;
+      captureGateRef.current.reset();
+      setCurrentDetection(undefined);
+      currentDetectionRef.current = undefined;
+      setCaptureDecision(undefined);
+      drawDetection(overlayRef.current, undefined);
+      setImportGroups([]);
+      importBusyRef.current = false;
+      setImportBusy(false);
+      setRestoreCandidate(undefined);
+      setRestoreResolved(true);
+      setExportFormat("json");
+      setSession(nextSession);
+      setNewSessionPrompt(false);
+      setStatus("New calibration started.");
+    } catch (sessionError) {
+      setNewSessionPrompt(false);
+      setStatus(undefined);
+      setError(`A new calibration could not be started: ${errorText(sessionError)}`);
+    } finally {
+      newSessionBusyRef.current = false;
+      setNewSessionBusy(false);
+    }
+  }, []);
+
   const resetEverything = useCallback(async () => {
     sessionGenerationRef.current += 1;
     clearTimeout(saveTimerRef.current);
@@ -1616,6 +1670,14 @@ export function App() {
                 >
                   {sessionPackageBusy ? "Preparing…" : "Download"}
                 </button>
+                <button
+                  type="button"
+                  class="button secondary"
+                  disabled={sessionPackageBusy || newSessionBusy}
+                  onClick={() => setNewSessionPrompt(true)}
+                >
+                  New calibration
+                </button>
                 <button type="button" class="button primary" onClick={() => setStep("review")}>Review views</button>
               </div>
               {session.result.excludedViewIds.length > 0 && <Status>{session.result.excludedViewIds.length} view(s) excluded from the result.</Status>}
@@ -1657,6 +1719,7 @@ export function App() {
       </footer>
 
       {restoreCandidate && !restoreResolved && <div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="restore-title"><h2 id="restore-title">Restore session?</h2><p>{restoreCandidate.observations.length} views saved {new Date(restoreCandidate.updatedAt).toLocaleString()}.</p><div class="button-row"><button type="button" class="button secondary" disabled={restoreBusy} onClick={() => void discardRestore()}>{restoreBusy ? "Discarding…" : "Discard"}</button><button type="button" class="button primary" disabled={restoreBusy} onClick={() => { sessionGenerationRef.current += 1; setSession(restoreCandidate); setRestoreCandidate(undefined); setRestoreResolved(true); setStatus("Saved session restored."); }}>Restore</button></div></div></div>}
+      {newSessionPrompt && <div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="new-session-title"><h2 id="new-session-title">Start a new calibration?</h2><p>Current views and results will be deleted.</p><div class="button-row"><button type="button" class="button secondary" disabled={newSessionBusy} onClick={() => setNewSessionPrompt(false)}>Cancel</button><button type="button" class="button primary" disabled={newSessionBusy} onClick={() => void startNewSession()}>{newSessionBusy ? "Starting…" : "Start new calibration"}</button></div></div></div>}
     </div>
   );
 }

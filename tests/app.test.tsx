@@ -1,7 +1,15 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/app/App";
-import { clearLocalSession } from "../src/lib/session-db";
+import { CHESSBOARD_PRESET } from "../src/domain/patterns";
+import type { CalibrationSessionV1, FrameObservation } from "../src/domain/types";
+import {
+  clearLocalSession,
+  getSessionBlob,
+  loadActiveSession,
+  putSessionBlob,
+  saveActiveSession,
+} from "../src/lib/session-db";
 
 class InitializingWorker extends EventTarget {
   terminated = false;
@@ -43,6 +51,79 @@ class InitializingWorker extends EventTarget {
 }
 
 const originalMediaDevices = Object.getOwnPropertyDescriptor(navigator, "mediaDevices");
+
+function completedSession(): CalibrationSessionV1 {
+  const observations: FrameObservation[] = Array.from({ length: 12 }, (_, index) => ({
+    id: `view-${index}`,
+    source: "upload",
+    sourceName: `frame-${index}.webp`,
+    createdAt: "2026-08-07T00:00:00.000Z",
+    imageSize: { width: 1280, height: 720 },
+    imagePoints: [
+      { x: 100, y: 100 },
+      { x: 200, y: 100 },
+      { x: 200, y: 200 },
+      { x: 100, y: 200 },
+    ],
+    objectPoints: [
+      { x: 0, y: 0, z: 0 },
+      { x: 1, y: 0, z: 0 },
+      { x: 1, y: 1, z: 0 },
+      { x: 0, y: 1, z: 0 },
+    ],
+    pointIds: [0, 1, 2, 3],
+    quality: {
+      sharpness: 100,
+      boardAreaRatio: 0.1,
+      minEdgeDistancePx: 100,
+      detectedCorners: 4,
+      availableCorners: 54,
+      basicValid: true,
+      messages: [],
+    },
+    pose: {
+      centerX: 0.5,
+      centerY: 0.5,
+      areaRatio: 0.1,
+      planeAngleDegrees: 15,
+      coverageCell: index % 9,
+    },
+    imageBlobKey: `image-${index}`,
+    thumbnailBlobKey: `thumbnail-${index}`,
+    included: true,
+  }));
+  const includedViewIds = observations.map(({ id }) => id);
+  return {
+    schemaVersion: 1,
+    id: "completed-session",
+    createdAt: "2026-08-07T00:00:00.000Z",
+    updatedAt: "2026-08-07T00:00:00.000Z",
+    step: "results",
+    lensModel: "fisheye-kb4",
+    pattern: CHESSBOARD_PRESET,
+    imageSize: { width: 1280, height: 720 },
+    observations,
+    result: {
+      schemaVersion: 1,
+      generator: { appVersion: "test", opencvVersion: "4.13.0" },
+      createdAt: "2026-08-07T00:00:00.000Z",
+      model: "fisheye-kb4",
+      imageSize: { width: 1280, height: 720 },
+      cameraMatrix: [900, 0, 640, 0, 900, 360, 0, 0, 1],
+      distortion: [0, 0, 0, 0],
+      rmsReprojectionError: 0.3,
+      perViewErrors: Object.fromEntries(includedViewIds.map((id) => [id, 0.3])),
+      includedViewIds,
+      excludedViewIds: [],
+      board: CHESSBOARD_PRESET,
+      poses: includedViewIds.map((viewId) => ({
+        viewId,
+        rotationVector: [0, 0, 0],
+        translationVector: [0, 0, 1],
+      })),
+    },
+  };
+}
 
 describe("application shell", () => {
   beforeEach(async () => {
@@ -171,5 +252,34 @@ describe("application shell", () => {
     expect(targetUrl.searchParams.get("rows")).toBe("6");
     expect(screen.getByRole("heading", { name: "Calibration board" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Capture" })).toBeNull();
+  });
+
+  it("starts a fresh calibration from results after confirmation", async () => {
+    await saveActiveSession(completedSession());
+    await putSessionBlob("image-0", new Blob(["frame"]));
+    render(<App />);
+
+    const restore = await screen.findByRole("button", { name: "Restore" });
+    fireEvent.click(restore);
+    const newCalibration = await screen.findByRole("button", { name: "New calibration" });
+    fireEvent.click(newCalibration);
+
+    expect(screen.getByRole("heading", { name: "Start a new calibration?" })).toBeTruthy();
+    expect(screen.getByText("Current views and results will be deleted.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Start new calibration" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Calibration board" })).toBeTruthy();
+      expect(screen.getByText("New calibration started.")).toBeTruthy();
+    });
+    expect((screen.getByLabelText("Lens model") as HTMLSelectElement).value).toBe(
+      "fisheye-kb4",
+    );
+    expect(screen.getByRole("button", { name: "Chessboard" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(screen.queryByRole("button", { name: "New calibration" })).toBeNull();
+    expect(await loadActiveSession()).toBeUndefined();
+    expect(await getSessionBlob("image-0")).toBeUndefined();
   });
 });
