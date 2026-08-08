@@ -41,6 +41,31 @@ describe("calibration worker client", () => {
     await client.dispose();
   });
 
+  it("requests a device-pixel-aligned display pattern", async () => {
+    const worker = new FakeWorker();
+    const client = clientFor(worker);
+    const pending = client.displayPatternSvg(CHARUCO_PRESET, 150, 105);
+    const request = worker.messages[0] as {
+      id: number;
+      type: string;
+      squarePixels: number;
+      markerPixels: number;
+    };
+    expect(request).toMatchObject({
+      type: "GENERATE_DISPLAY_PATTERN_SVG",
+      squarePixels: 150,
+      markerPixels: 105,
+    });
+    worker.respond({
+      id: request.id,
+      ok: true,
+      type: "GENERATE_DISPLAY_PATTERN_SVG",
+      svg: "<svg width=\"750\"/>",
+    });
+    await expect(pending).resolves.toContain("750");
+    await client.dispose();
+  });
+
   it("does not leave a pending request when postMessage throws", async () => {
     const worker = new FakeWorker();
     worker.postError = new Error("clone failed");

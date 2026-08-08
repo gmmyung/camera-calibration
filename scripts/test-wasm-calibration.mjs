@@ -195,6 +195,47 @@ assert.match(
   ),
   /whole number between 3 and 30/,
 );
+const displayPattern = callNative(() =>
+  module.generateDisplayPatternSvg({
+    kind: "charuco",
+    squaresX: 5,
+    squaresY: 7,
+    squareLengthMm: 30,
+    markerLengthMm: 21,
+    dictionary: "DICT_5X5_100",
+    legacyPattern: false,
+  }, 150, 105),
+);
+assert.match(displayPattern, /width="750" height="1050"/);
+assert.doesNotMatch(displayPattern, /print at actual size/);
+assert.match(
+  nativeError(() =>
+    module.generateDisplayPatternSvg({
+      kind: "charuco",
+      squaresX: 5,
+      squaresY: 7,
+      squareLengthMm: 30,
+      markerLengthMm: 21,
+      dictionary: "DICT_5X5_100",
+      legacyPattern: false,
+    }, 150, 150),
+  ),
+  /smaller than a square/,
+);
+assert.match(
+  nativeError(() =>
+    module.generateDisplayPatternSvg({
+      kind: "charuco",
+      squaresX: 5,
+      squaresY: 7,
+      squareLengthMm: 30,
+      markerLengthMm: 21,
+      dictionary: "DICT_5X5_100",
+      legacyPattern: false,
+    }, 150, 106),
+  ),
+  /complete marker modules/,
+);
 assert.match(
   nativeError(() =>
     module.detectFrame(new Uint8Array(4), 10_000, 10_000, {

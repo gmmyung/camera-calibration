@@ -25,7 +25,14 @@ export type WorkerRequest =
       bitmap: ImageBitmap;
       calibration: CalibrationResultV1;
     }
-  | { id: number; type: "GENERATE_PATTERN_SVG"; pattern: PatternConfig };
+  | { id: number; type: "GENERATE_PATTERN_SVG"; pattern: PatternConfig }
+  | {
+      id: number;
+      type: "GENERATE_DISPLAY_PATTERN_SVG";
+      pattern: PatternConfig;
+      squarePixels: number;
+      markerPixels?: number;
+    };
 
 export interface UndistortedFrame {
   width: number;
@@ -39,4 +46,5 @@ export type WorkerResponse =
   | { id: number; ok: true; type: "SOLVE_CALIBRATION"; result: CalibrationResultV1 }
   | { id: number; ok: true; type: "UNDISTORT_FRAME"; frame: UndistortedFrame }
   | { id: number; ok: true; type: "GENERATE_PATTERN_SVG"; svg: string }
+  | { id: number; ok: true; type: "GENERATE_DISPLAY_PATTERN_SVG"; svg: string }
   | { id: number; ok: false; type: WorkerRequest["type"]; error: string };

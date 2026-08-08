@@ -56,6 +56,11 @@ export interface CalibrationWasmModule {
     calibration: CalibrationResultV1,
   ): NativeUndistortedFrame;
   generatePatternSvg(pattern: PatternConfig): string;
+  generateDisplayPatternSvg(
+    pattern: PatternConfig,
+    squarePixels: number,
+    markerPixels: number,
+  ): string;
 }
 
 type CalibrationModuleFactory = (options: {

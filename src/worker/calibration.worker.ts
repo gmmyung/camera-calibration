@@ -174,6 +174,19 @@ context.addEventListener("message", async (event: MessageEvent<WorkerRequest>) =
         };
         break;
       }
+      case "GENERATE_DISPLAY_PATTERN_SVG": {
+        response = {
+          id: request.id,
+          ok: true,
+          type: request.type,
+          svg: requireModule().generateDisplayPatternSvg(
+            request.pattern,
+            request.squarePixels,
+            request.markerPixels ?? 0,
+          ),
+        };
+        break;
+      }
     }
     context.postMessage(response);
   } catch (error) {

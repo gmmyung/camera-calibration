@@ -1102,6 +1102,84 @@ std::string generate_pattern_svg(const val& pattern) {
   return svg.str();
 }
 
+std::string generate_display_pattern_svg(const val& pattern,
+                                         int square_pixels,
+                                         int marker_pixels) {
+  if (square_pixels < 8 || square_pixels > 8192) {
+    throw std::runtime_error("Display square size must be between 8 and 8192 pixels.");
+  }
+  const std::string kind = pattern["kind"].as<std::string>();
+  int squares_x = 0;
+  int squares_y = 0;
+  std::ostringstream board_elements;
+
+  if (kind == "chessboard") {
+    const int inner_x = pattern_dimension(pattern, "innerCornersX");
+    const int inner_y = pattern_dimension(pattern, "innerCornersY");
+    pattern_length(pattern, "squareLengthMm");
+    squares_x = inner_x + 1;
+    squares_y = inner_y + 1;
+    if (squares_x * square_pixels > 32768 || squares_y * square_pixels > 32768) {
+      throw std::runtime_error("Display board exceeds the 32768-pixel edge limit.");
+    }
+    for (int row = 0; row < squares_y; ++row) {
+      for (int column = 0; column < squares_x; ++column) {
+        if ((row + column) % 2 == 0) {
+          board_elements << "<rect x=\"" << column * square_pixels << "\" y=\""
+                         << row * square_pixels << "\" width=\"" << square_pixels
+                         << "\" height=\"" << square_pixels << "\" fill=\"#000\"/>";
+        }
+      }
+    }
+  } else if (kind == "charuco") {
+    squares_x = pattern_dimension(pattern, "squaresX");
+    squares_y = pattern_dimension(pattern, "squaresY");
+    const double square = pattern_length(pattern, "squareLengthMm");
+    const double marker = pattern_length(pattern, "markerLengthMm");
+    const bool legacy = pattern["legacyPattern"].as<bool>();
+    const std::string dictionary_name = pattern["dictionary"].as<std::string>();
+    cv::aruco::Dictionary dictionary =
+        cv::aruco::getPredefinedDictionary(dictionary_type(dictionary_name));
+    validate_charuco_geometry(squares_x, squares_y, square, marker, dictionary);
+    if (marker_pixels <= 0 || marker_pixels >= square_pixels) {
+      throw std::runtime_error("Display marker size must be positive and smaller than a square.");
+    }
+    if (marker_pixels % (dictionary.markerSize + 2) != 0) {
+      throw std::runtime_error("Display marker size must contain complete marker modules.");
+    }
+    if (squares_x * square_pixels > 32768 || squares_y * square_pixels > 32768) {
+      throw std::runtime_error("Display board exceeds the 32768-pixel edge limit.");
+    }
+    cv::aruco::CharucoBoard board(
+        cv::Size(squares_x, squares_y), 1.0F,
+        static_cast<float>(marker_pixels) / static_cast<float>(square_pixels), dictionary);
+    board.setLegacyPattern(legacy);
+    cv::Mat image;
+    board.generateImage(
+        cv::Size(squares_x * square_pixels, squares_y * square_pixels), image, 0, 1);
+    for (const auto& rectangle : merged_black_rectangles(image)) {
+      board_elements << "<rect x=\"" << rectangle.x << "\" y=\"" << rectangle.y
+                     << "\" width=\"" << rectangle.width << "\" height=\""
+                     << rectangle.height << "\" fill=\"#000\"/>";
+    }
+  } else {
+    throw std::runtime_error("Unsupported calibration pattern.");
+  }
+
+  const std::int64_t board_width = static_cast<std::int64_t>(squares_x) * square_pixels;
+  const std::int64_t board_height = static_cast<std::int64_t>(squares_y) * square_pixels;
+  if (board_width <= 0 || board_height <= 0 || board_width > 32768 || board_height > 32768) {
+    throw std::runtime_error("Display board exceeds the 32768-pixel edge limit.");
+  }
+  std::ostringstream svg;
+  svg << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" << board_width
+      << "\" height=\"" << board_height << "\" viewBox=\"0 0 " << board_width << ' '
+      << board_height << "\" shape-rendering=\"crispEdges\">"
+      << "<rect width=\"100%\" height=\"100%\" fill=\"#fff\"/>"
+      << board_elements.str() << "</svg>";
+  return svg.str();
+}
+
 std::string opencv_version() { return CV_VERSION; }
 
 }  // namespace
@@ -1112,4 +1190,5 @@ EMSCRIPTEN_BINDINGS(camera_calibration) {
   emscripten::function("solveCalibration", &solve_calibration);
   emscripten::function("undistortFrame", &undistort_frame);
   emscripten::function("generatePatternSvg", &generate_pattern_svg);
+  emscripten::function("generateDisplayPatternSvg", &generate_display_pattern_svg);
 }

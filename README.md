@@ -11,6 +11,7 @@ There is no runtime server. Camera frames, imported images, observations, and re
 - Standard five-coefficient radial/tangential and four-coefficient fisheye models
 - ChArUco and chessboard presets plus custom board definitions
 - Exact-dimension SVG board export with a 100 mm scale
+- Fullscreen display targets with saved monitor specifications and ruler-verified physical scale
 - Robust reprojection-error filtering with reviewable exclusions
 - Point-coverage and residual maps, worst-view overlays, and leave-one-view-out stability
 - Live and independent-image undistortion previews
@@ -40,6 +41,12 @@ npm run dev
 The camera API requires HTTPS or `localhost`. If `public/wasm/calibration.js` and `calibration.wasm` have not been built, the UI loads but reports that the calibration engine is unavailable.
 
 The first connection leaves dimensions unset unless the user enters them, allowing the camera to choose its default mode. Entered dimensions are requested exactly; the tool does not fall back to browser-selected dimensions. Browsers expose independent width and height bounds, not a list of valid mode combinations, so the UI does not present those bounds as camera modes. Where supported, camera requests also require `resizeMode: { exact: "none" }`. Other browsers can still connect, but only the actual stream dimensions can be reported. Changing the camera or stream settings clears incompatible captures.
+
+## Display targets
+
+The browser cannot determine a monitor's physical dimensions. Display profiles therefore use either a diagonal/native-resolution estimate or exact active-panel dimensions. A fullscreen ruler check converts the rendered reference into a measured millimetres-per-pixel scale. Verified profiles are stored locally and require verification again when the browser-reported display raster or pixel ratio changes.
+
+Displayed boards are generated on whole device-pixel boundaries. ChArUco marker sides are snapped to complete dictionary modules, and the UI reports the resulting square, marker, and full-board dimensions. A specification-only profile is marked as estimated; ruler-checked profiles are marked as verified.
 
 ## Verification
 

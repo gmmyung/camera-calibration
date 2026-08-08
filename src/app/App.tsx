@@ -56,10 +56,12 @@ import {
   saveActiveSession,
   storageHeadroom,
 } from "../lib/session-db";
+import { clearDisplayProfiles } from "../lib/display-profiles";
 import { createSessionPackage, readSessionPackage } from "../lib/session-package";
 import { WebGlUndistortRenderer } from "../lib/undistort-webgl";
 import { CalibrationWorkerClient } from "../worker/client";
 import { CalibrationDiagnostics } from "./CalibrationDiagnostics";
+import { DisplayTargetPanel } from "./DisplayTargetPanel";
 import { ObservationThumbnail } from "./ObservationThumbnail";
 import { ValidationImagePreview } from "./ValidationImagePreview";
 
@@ -1448,6 +1450,7 @@ export function App() {
     setError(undefined);
     try {
       await clearLocalSession();
+      clearDisplayProfiles();
       const nextSession = freshSession();
       skipPristineSaveIdRef.current = nextSession.id;
       setSession(nextSession);
@@ -1461,7 +1464,7 @@ export function App() {
       setImportBusy(false);
       setRestoreCandidate(undefined);
       setRestoreResolved(true);
-      setStatus("Local session data was deleted.");
+      setStatus("Local session and display profiles were deleted.");
     } catch (resetError) {
       setStatus(undefined);
       setError(`Local data could not be deleted: ${errorText(resetError)}`);
@@ -1622,6 +1625,15 @@ export function App() {
             <ValidationImagePreview result={session.result} worker={worker} />
           </div>
         )}
+
+        <DisplayTargetPanel
+          settingsVisible={session.step === "setup"}
+          pattern={session.pattern}
+          worker={worker}
+          workerReady={workerStatus === "ready" && patternErrors.length === 0}
+          onApplyPattern={setPattern}
+          onStartCapture={() => setStep("capture")}
+        />
       </main>
 
       <footer>

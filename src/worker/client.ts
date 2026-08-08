@@ -101,6 +101,23 @@ export class CalibrationWorkerClient {
     return response.svg;
   }
 
+  async displayPatternSvg(
+    pattern: PatternConfig,
+    squarePixels: number,
+    markerPixels?: number,
+  ): Promise<string> {
+    const response = await this.request({
+      type: "GENERATE_DISPLAY_PATTERN_SVG",
+      pattern,
+      squarePixels,
+      markerPixels,
+    });
+    if (response.type !== "GENERATE_DISPLAY_PATTERN_SVG") {
+      throw new Error("Unexpected worker response.");
+    }
+    return response.svg;
+  }
+
   dispose(): Promise<void> {
     this.fail(new Error("The calibration worker was disposed."));
     return Promise.resolve();
