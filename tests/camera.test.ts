@@ -3,7 +3,6 @@ import { CameraController } from "../src/lib/camera";
 
 function fakeTrack(
   options: {
-    capabilities?: MediaTrackCapabilities;
     settings?: Partial<MediaTrackSettings & { resizeMode: string }>;
   } = {},
 ) {
@@ -23,9 +22,6 @@ function fakeTrack(
           ...options.settings,
         }) as MediaTrackSettings & { resizeMode?: string },
     ),
-    ...(options.capabilities
-      ? { getCapabilities: vi.fn(() => options.capabilities) }
-      : {}),
   };
   return track;
 }
@@ -55,7 +51,6 @@ describe("CameraController", () => {
 
   it("requests exact dimensions without browser cropping or scaling", async () => {
     const track = fakeTrack({
-      capabilities: { width: { min: 320, max: 1920 } },
       settings: { width: 1920, height: 1080 },
     });
     const getUserMedia = vi.fn().mockResolvedValueOnce(fakeStream(track));
@@ -75,7 +70,6 @@ describe("CameraController", () => {
       deviceId: "camera-1",
       cameraLabel: "Test camera",
     });
-    expect(controller.capabilities()?.width?.max).toBe(1920);
   });
 
   it("does not fall back when an exact resolution is unsupported", async () => {
@@ -95,7 +89,6 @@ describe("CameraController", () => {
     expect(track.applyConstraints.mock.calls[0]![0].width).toEqual({ exact: 3840 });
     expect(track.applyConstraints.mock.calls[0]![0].resizeMode).toEqual({ exact: "none" });
     expect(track.applyConstraints).toHaveBeenCalledOnce();
-    expect(controller.capabilities()).toBeUndefined();
   });
 
   it("lets the camera choose its native default when dimensions are omitted", async () => {
@@ -109,6 +102,16 @@ describe("CameraController", () => {
     expect(constraints.width).toBeUndefined();
     expect(constraints.height).toBeUndefined();
     expect(constraints.resizeMode).toEqual({ exact: "none" });
+  });
+
+  it("rejects requested modes above the processing limit before opening a camera", async () => {
+    const getUserMedia = vi.fn();
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: getUserMedia });
+
+    await expect(new CameraController().open({ width: 10_000, height: 10_000 })).rejects.toThrow(
+      "40-megapixel processing limit",
+    );
+    expect(getUserMedia).not.toHaveBeenCalled();
   });
 
   it("keeps exact dimensions but omits resizeMode when the browser does not support it", async () => {
@@ -142,6 +145,18 @@ describe("CameraController", () => {
     });
     await controller.applyResolution({ width: 640, height: 480 });
     expect(track.applyConstraints.mock.calls[0]![0]).not.toHaveProperty("resizeMode");
+  });
+
+  it("accepts an exact unscaled constraint when getSettings omits resizeMode", async () => {
+    const track = fakeTrack({ settings: { resizeMode: undefined } });
+    const getUserMedia = vi.fn().mockResolvedValue(fakeStream(track));
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: getUserMedia });
+
+    const controller = new CameraController();
+    await controller.open({ width: 1280, height: 720 });
+
+    expect(getUserMedia.mock.calls[0]![0].video.resizeMode).toEqual({ exact: "none" });
+    expect(controller.settings().resizeMode).toBe("none");
   });
 
   it("waits for reported dimensions to settle after applying constraints", async () => {
@@ -298,7 +313,7 @@ describe("CameraController", () => {
           finishAdjustment = resolve;
         }),
     );
-    const adjustment = controller.applyFocusMode("manual");
+    const adjustment = controller.applyResolution({ width: 640, height: 480 });
     const rejection = expect(adjustment).rejects.toThrow("cancelled");
     controller.stop();
     finishAdjustment?.();

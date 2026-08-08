@@ -139,6 +139,16 @@ assert.equal(result.previewCameraMatrix.length, 9);
 assert.equal(result.previewCameraMatrix.every(Number.isFinite), true);
 assert.ok(result.previewCameraMatrix[0] > 0);
 assert.ok(result.previewCameraMatrix[4] > 0);
+assert.equal(Object.keys(result.residuals).length, validViews.length);
+for (const view of validViews) {
+  assert.equal(result.residuals[view.id].length, objectPoints.length);
+  assert.equal(result.residuals[view.id].every((residual) => Number.isFinite(residual.magnitude)), true);
+}
+assert.equal(result.stability.method, "leave-one-view-out");
+assert.equal(result.stability.attemptedSamples, 12);
+assert.ok(result.stability.successfulSamples >= 3);
+assert.equal(result.stability.standardDeviations.length, 8);
+assert.equal(result.stability.maxAbsoluteDeltas.length, 8);
 
 assert.match(
   nativeError(() =>

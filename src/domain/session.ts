@@ -5,6 +5,7 @@ import {
   type DetectionPoseFeatures,
   type DetectionQuality,
   type PatternConfig,
+  type Point2,
 } from "./types";
 import { validatePattern } from "./patterns";
 
@@ -102,11 +103,13 @@ function isQuality(value: unknown): value is DetectionQuality {
     isRecord(value) &&
     isNonNegativeNumber(value.sharpness) &&
     isNonNegativeNumber(value.boardAreaRatio) &&
+    value.boardAreaRatio <= 1 &&
     isNonNegativeNumber(value.minEdgeDistancePx) &&
     Number.isInteger(value.detectedCorners) &&
     (value.detectedCorners as number) >= 0 &&
     Number.isInteger(value.availableCorners) &&
     (value.availableCorners as number) >= 0 &&
+    (value.availableCorners as number) <= MAX_POINTS_PER_VIEW &&
     typeof value.basicValid === "boolean" &&
     Array.isArray(value.messages) &&
     value.messages.length <= 20 &&
@@ -118,9 +121,15 @@ function isPoseFeatures(value: unknown): value is DetectionPoseFeatures {
   return (
     isRecord(value) &&
     isFiniteNumber(value.centerX) &&
+    value.centerX >= 0 &&
+    value.centerX <= 1 &&
     isFiniteNumber(value.centerY) &&
+    value.centerY >= 0 &&
+    value.centerY <= 1 &&
     isNonNegativeNumber(value.areaRatio) &&
+    value.areaRatio <= 1 &&
     isNonNegativeNumber(value.planeAngleDegrees) &&
+    value.planeAngleDegrees <= 90 &&
     (value.skew === undefined ||
       (isNonNegativeNumber(value.skew) && value.skew <= 1)) &&
     Number.isInteger(value.coverageCell) &&
@@ -132,6 +141,10 @@ function isPoseFeatures(value: unknown): value is DetectionPoseFeatures {
 function isObservation(value: unknown): boolean {
   if (!isRecord(value)) return false;
   if (!Array.isArray(value.imagePoints)) return false;
+  if (!isImageSize(value.imageSize)) return false;
+  const imageSize = value.imageSize as UnknownRecord;
+  const width = imageSize.width as number;
+  const height = imageSize.height as number;
   const imagePoints = value.imagePoints;
   const pointCount = imagePoints.length;
   if (pointCount < 4 || pointCount > MAX_POINTS_PER_VIEW) return false;
@@ -150,9 +163,21 @@ function isObservation(value: unknown): boolean {
     (value.source === "live" || value.source === "upload") &&
     isOptionalString(value.sourceName) &&
     isTimestamp(value.createdAt) &&
-    isImageSize(value.imageSize) &&
-    imagePoints.every((point) => isPoint(point, 2)) &&
-    value.objectPoints.every((point) => isPoint(point, 3)) &&
+    imagePoints.every(
+      (point) =>
+        isPoint(point, 2) &&
+        point.x >= -width &&
+        point.x <= width * 2 &&
+        point.y >= -height &&
+        point.y <= height * 2,
+    ) &&
+    value.objectPoints.every(
+      (point) =>
+        isPoint(point, 3) &&
+        Math.abs(point.x) <= 10_000_000 &&
+        Math.abs(point.y) <= 10_000_000 &&
+        Math.abs(point.z) <= 10_000_000,
+    ) &&
     ids.every((id) => Number.isInteger(id) && (id as number) >= 0) &&
     new Set(ids).size === ids.length &&
     isQuality(quality) &&
@@ -176,6 +201,95 @@ function isUniqueStringArray(value: unknown, knownIds: Set<string>): value is st
     Array.isArray(value) &&
     value.every((id) => isNonEmptyString(id) && knownIds.has(id)) &&
     new Set(value).size === value.length
+  );
+}
+
+function isResidualRecord(
+  value: unknown,
+  includedIds: Set<string>,
+  observations: Map<string, UnknownRecord>,
+): boolean {
+  if (!isRecord(value)) return false;
+  const entries = Object.entries(value);
+  if (entries.length !== includedIds.size || entries.some(([id]) => !includedIds.has(id))) {
+    return false;
+  }
+  return entries.every(([viewId, residuals]) => {
+    const observation = observations.get(viewId);
+    const pointIds = observation?.pointIds;
+    const imagePoints = observation?.imagePoints;
+    if (
+      !observation ||
+      !Array.isArray(pointIds) ||
+      !Array.isArray(imagePoints) ||
+      !Array.isArray(residuals)
+    ) {
+      return false;
+    }
+    if (residuals.length !== pointIds.length) return false;
+    const knownIds = new Set(pointIds);
+    const seenIds = new Set<number>();
+    return residuals.every((residual) => {
+      if (
+        !isRecord(residual) ||
+        !Number.isInteger(residual.pointId) ||
+        !knownIds.has(residual.pointId) ||
+        seenIds.has(residual.pointId as number) ||
+        !isPoint(residual.observed, 2) ||
+        !isPoint(residual.projected, 2) ||
+        !isNonNegativeNumber(residual.magnitude)
+      ) {
+        return false;
+      }
+      const observed = residual.observed as Point2;
+      const projected = residual.projected as Point2;
+      const pointIndex = pointIds.indexOf(residual.pointId);
+      const sourcePoint = imagePoints[pointIndex];
+      if (pointIndex < 0 || !isPoint(sourcePoint, 2)) return false;
+      const sourceTolerance = Math.max(
+        1e-3,
+        Math.max(Math.abs(sourcePoint.x), Math.abs(sourcePoint.y)) * 1e-6,
+      );
+      if (
+        Math.abs(sourcePoint.x - observed.x) > sourceTolerance ||
+        Math.abs(sourcePoint.y - observed.y) > sourceTolerance
+      ) {
+        return false;
+      }
+      const measured = Math.hypot(
+        projected.x - observed.x,
+        projected.y - observed.y,
+      );
+      if (Math.abs(measured - residual.magnitude) > Math.max(1e-3, measured * 1e-5)) {
+        return false;
+      }
+      seenIds.add(residual.pointId as number);
+      return true;
+    });
+  });
+}
+
+function isStability(value: unknown, parameterCount: number): boolean {
+  if (!isRecord(value)) return false;
+  if (
+    value.method !== "leave-one-view-out" ||
+    !Number.isInteger(value.attemptedSamples) ||
+    (value.attemptedSamples as number) < 1 ||
+    (value.attemptedSamples as number) > 12 ||
+    !Number.isInteger(value.successfulSamples) ||
+    (value.successfulSamples as number) < 0 ||
+    (value.successfulSamples as number) > (value.attemptedSamples as number)
+  ) {
+    return false;
+  }
+  const expectedLength = (value.successfulSamples as number) >= 3 ? parameterCount : 0;
+  return (
+    Array.isArray(value.standardDeviations) &&
+    value.standardDeviations.length === expectedLength &&
+    value.standardDeviations.every(isNonNegativeNumber) &&
+    Array.isArray(value.maxAbsoluteDeltas) &&
+    value.maxAbsoluteDeltas.length === expectedLength &&
+    value.maxAbsoluteDeltas.every(isNonNegativeNumber)
   );
 }
 
@@ -226,6 +340,17 @@ function isCalibrationResult(
     return false;
   }
   const includedIds = new Set(includedViewIds);
+  const perViewErrors = value.perViewErrors as UnknownRecord;
+  const observationsById = new Map(observations.map((observation) => [String(observation.id), observation]));
+  if (
+    includedViewIds.some((id) => !Object.hasOwn(perViewErrors, id)) ||
+    (value.residuals !== undefined &&
+      !isResidualRecord(value.residuals, includedIds, observationsById)) ||
+    (value.stability !== undefined &&
+      !isStability(value.stability, 4 + expectedDistortion))
+  ) {
+    return false;
+  }
   const poseIds = new Set<string>();
   return (
     includedViewIds.length >= 12 &&
@@ -305,6 +430,12 @@ export function parseStoredSession(value: unknown): CalibrationSessionV1 | undef
   const observations = value.observations as UnknownRecord[];
   const ids = observations.map(({ id }) => String(id));
   if (new Set(ids).size !== ids.length) return undefined;
+  const blobKeys = observations.flatMap(({ imageBlobKey, thumbnailBlobKey }) => [
+    String(imageBlobKey),
+    String(thumbnailBlobKey),
+  ]);
+  if (new Set(blobKeys).size !== blobKeys.length) return undefined;
+  if (observations.length > 0 && value.imageSize === undefined) return undefined;
   if (
     value.imageSize !== undefined &&
     observations.some(({ imageSize }) => !sameImageSize(imageSize, value.imageSize))

@@ -8,6 +8,7 @@ import {
   loadActiveSession,
   putSessionBlob,
   putSessionBlobs,
+  replaceLocalSession,
   saveActiveSession,
 } from "../src/lib/session-db";
 
@@ -60,5 +61,42 @@ describe("local session recovery", () => {
     await clearLocalSession();
     expect(await loadActiveSession()).toBeUndefined();
     expect(await getSessionBlob("frame-1")).toBeUndefined();
+  });
+
+  it("replaces session metadata and blobs in one transaction", async () => {
+    await saveActiveSession(session);
+    await putSessionBlob("old-frame", new Blob(["old"]));
+    const replacement = { ...session, id: "session-2" };
+
+    await replaceLocalSession(replacement, [["new-frame", new Blob(["new"])]]);
+
+    expect(await loadActiveSession()).toEqual(replacement);
+    expect(await getSessionBlob("old-frame")).toBeUndefined();
+    expect(await getSessionBlob("new-frame")).toBeDefined();
+  });
+
+  it("migrates the previous database name", async () => {
+    const legacyName = ["lens", "bench-calibration"].join("");
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(legacyName, 1);
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore("sessions");
+        request.result.createObjectStore("blobs");
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const transaction = database.transaction(["sessions", "blobs"], "readwrite");
+    transaction.objectStore("sessions").put(session, "active");
+    transaction.objectStore("blobs").put(new Blob(["legacy"]), "legacy-frame");
+    await new Promise<void>((resolve, reject) => {
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+    database.close();
+
+    expect(await loadActiveSession()).toEqual(session);
+    expect(await getSessionBlob("legacy-frame")).toBeDefined();
+    expect((await indexedDB.databases()).some(({ name }) => name === legacyName)).toBe(false);
   });
 });

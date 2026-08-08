@@ -31,9 +31,14 @@ import {
 import {
   CameraController,
   listVideoDevices,
-  type ExtendedCapabilities,
 } from "../lib/camera";
-import { downloadBlob, downloadText, resultJson, toOpenCvYaml } from "../lib/exports";
+import {
+  downloadBlob,
+  downloadText,
+  resultJson,
+  toOpenCvYaml,
+  toRosCameraInfoYaml,
+} from "../lib/exports";
 import { createId } from "../lib/ids";
 import {
   decodeImage,
@@ -45,24 +50,32 @@ import {
 import {
   clearLocalSession,
   deleteSessionBlobs,
-  getSessionBlob,
   loadActiveSession,
   putSessionBlobs,
+  replaceLocalSession,
   saveActiveSession,
   storageHeadroom,
 } from "../lib/session-db";
+import { createSessionPackage, readSessionPackage } from "../lib/session-package";
 import { WebGlUndistortRenderer } from "../lib/undistort-webgl";
 import { CalibrationWorkerClient } from "../worker/client";
+import { CalibrationDiagnostics } from "./CalibrationDiagnostics";
+import { ObservationThumbnail } from "./ObservationThumbnail";
+import { ValidationImagePreview } from "./ValidationImagePreview";
 
-const MAX_IMPORT_FILES = 100;
+const MAX_SESSION_VIEWS = 100;
+const MAX_INCLUDED_VIEWS = 30;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_IMPORT_BYTES = 250 * 1024 * 1024;
 const MAX_CAMERA_DIMENSION = 32_768;
+const MAX_CAMERA_PIXELS = 40_000_000;
 
 interface ResolutionDraft {
   width: string;
   height: string;
 }
+
+type ExportFormat = "json" | "opencv-yaml" | "ros-yaml" | "session-package";
 
 function parseResolutionDraft(draft: ResolutionDraft): {
   size?: ImageSize;
@@ -83,6 +96,9 @@ function parseResolutionDraft(draft: ResolutionDraft): {
     height > MAX_CAMERA_DIMENSION
   ) {
     return { error: `Width and height must be whole numbers from 1 to ${MAX_CAMERA_DIMENSION}.` };
+  }
+  if (width * height > MAX_CAMERA_PIXELS) {
+    return { error: "The requested mode exceeds the 40-megapixel processing limit." };
   }
   return { size: { width, height } };
 }
@@ -139,7 +155,7 @@ function errorText(error: unknown): string {
     return "No matching camera was found.";
   }
   if (name === "OverconstrainedError") {
-    return "The camera does not provide that exact unscaled mode. Try dimensions within the reported range.";
+    return "The camera does not provide that exact mode. Try another mode or leave width and height blank.";
   }
   if (
     name === "NotReadableError" ||
@@ -208,7 +224,13 @@ function Stepper({ step }: { step: AppStep }) {
   );
 }
 
-function Status({ children, tone = "info" }: { children: ComponentChildren; tone?: string }) {
+function Status({
+  children,
+  tone = "info",
+}: {
+  children: ComponentChildren;
+  tone?: "info" | "error";
+}) {
   return (
     <div class={`status status-${tone}`} role={tone === "error" ? "alert" : "status"}>
       {children}
@@ -312,40 +334,45 @@ function PatternEditor({
               step={0.1}
               onChange={(squareLengthMm) => onChange({ ...pattern, squareLengthMm })}
             />
-            <NumberField
-              label="Marker size (mm)"
-              value={pattern.markerLengthMm}
-              min={0.1}
-              max={MAX_PATTERN_LENGTH_MM}
-              step={0.1}
-              onChange={(markerLengthMm) => onChange({ ...pattern, markerLengthMm })}
-            />
-            <label class="field span-two">
-              <span>Marker dictionary</span>
-              <select
-                value={pattern.dictionary}
-                onChange={(event) =>
-                  onChange({
-                    ...pattern,
-                    dictionary: event.currentTarget.value as typeof pattern.dictionary,
-                  })
-                }
-              >
-                {DICTIONARY_NAMES.map((dictionary) => (
-                  <option key={dictionary} value={dictionary}>{dictionary}</option>
-                ))}
-              </select>
-            </label>
-            <label class="check span-two">
-              <input
-                type="checkbox"
-                checked={pattern.legacyPattern}
-                onChange={(event) =>
-                  onChange({ ...pattern, legacyPattern: event.currentTarget.checked })
-                }
-              />
-              My board uses OpenCV's pre-4.6 legacy ChArUco layout
-            </label>
+            <details class="advanced-settings span-two">
+              <summary>Advanced ChArUco settings</summary>
+              <div class="form-grid">
+                <NumberField
+                  label="Marker size (mm)"
+                  value={pattern.markerLengthMm}
+                  min={0.1}
+                  max={MAX_PATTERN_LENGTH_MM}
+                  step={0.1}
+                  onChange={(markerLengthMm) => onChange({ ...pattern, markerLengthMm })}
+                />
+                <label class="field">
+                  <span>Marker dictionary</span>
+                  <select
+                    value={pattern.dictionary}
+                    onChange={(event) =>
+                      onChange({
+                        ...pattern,
+                        dictionary: event.currentTarget.value as typeof pattern.dictionary,
+                      })
+                    }
+                  >
+                    {DICTIONARY_NAMES.map((dictionary) => (
+                      <option key={dictionary} value={dictionary}>{dictionary}</option>
+                    ))}
+                  </select>
+                </label>
+                <label class="check span-two">
+                  <input
+                    type="checkbox"
+                    checked={pattern.legacyPattern}
+                    onChange={(event) =>
+                      onChange({ ...pattern, legacyPattern: event.currentTarget.checked })
+                    }
+                  />
+                  Pre-4.6 OpenCV board layout
+                </label>
+              </div>
+            </details>
           </>
         ) : (
           <>
@@ -421,30 +448,6 @@ function CoverageMetrics({
         </div>
       ))}
     </div>
-  );
-}
-
-function ObservationThumbnail({ observation }: { observation: FrameObservation }) {
-  const [url, setUrl] = useState<string>();
-  useEffect(() => {
-    let disposed = false;
-    let objectUrl: string | undefined;
-    getSessionBlob(observation.thumbnailBlobKey)
-      .then((blob) => {
-        if (!blob || disposed) return;
-        objectUrl = URL.createObjectURL(blob);
-        setUrl(objectUrl);
-      })
-      .catch(() => undefined);
-    return () => {
-      disposed = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [observation.thumbnailBlobKey]);
-  return url ? (
-    <img src={url} alt={observation.sourceName ?? "Calibration capture"} />
-  ) : (
-    <div class="image-placeholder" />
   );
 }
 
@@ -654,7 +657,6 @@ export function App() {
     width: "",
     height: "",
   });
-  const [capabilities, setCapabilities] = useState<ExtendedCapabilities>();
   const [status, setStatus] = useState<string>();
   const [error, setError] = useState<string>();
   const [currentDetection, setCurrentDetection] = useState<DetectionResult>();
@@ -663,6 +665,8 @@ export function App() {
   const [autoCapture, setAutoCapture] = useState(true);
   const [importGroups, setImportGroups] = useState<ImageFileGroup[]>([]);
   const [importBusy, setImportBusy] = useState(false);
+  const [sessionPackageBusy, setSessionPackageBusy] = useState(false);
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("json");
   const [solving, setSolving] = useState(false);
   const [cameraBusy, setCameraBusy] = useState(false);
   const cameraRef = useRef(new CameraController());
@@ -680,6 +684,9 @@ export function App() {
   sessionRef.current = session;
   currentDetectionRef.current = currentDetection;
   const progress = useMemo(() => captureProgress(session.observations), [session.observations]);
+  const currentFrameUsable = Boolean(
+    currentDetection?.ok && isUsableDetection(currentDetection),
+  );
   const patternErrors = useMemo(() => validatePattern(session.pattern), [session.pattern]);
   const requestedResolution = useMemo(
     () => parseResolutionDraft(resolutionDraft),
@@ -820,7 +827,6 @@ export function App() {
       sessionRef.current.observations.length > 0 &&
       cameraPipelineChanged(sessionRef.current.captureSettings, settings);
     if (pipelineChanged) await clearObservations();
-    setCapabilities(cameraRef.current.capabilities());
     if (syncResolutionDraft) {
       setResolutionDraft({
         width: String(settings.width),
@@ -846,7 +852,6 @@ export function App() {
     if (setupVideoRef.current) setupVideoRef.current.srcObject = null;
     if (captureVideoRef.current) captureVideoRef.current.srcObject = null;
     setStream(undefined);
-    setCapabilities(undefined);
     setCurrentDetection(undefined);
     currentDetectionRef.current = undefined;
     setCaptureDecision(undefined);
@@ -946,7 +951,6 @@ export function App() {
       if (cameraRef.current.currentStream() !== stream) return;
       cameraRef.current.stop();
       setStream(undefined);
-      setCapabilities(undefined);
       setCurrentDetection(undefined);
       currentDetectionRef.current = undefined;
       setCaptureDecision(undefined);
@@ -961,24 +965,6 @@ export function App() {
     return () => track.removeEventListener("ended", handleEnded);
   }, [stream]);
 
-  const applyFocusMode = useCallback(async (focusMode: string) => {
-    if (cameraBusyRef.current) return;
-    cameraBusyRef.current = true;
-    setCameraBusy(true);
-    setError(undefined);
-    try {
-      const settings = await cameraRef.current.applyFocusMode(focusMode);
-      const pipelineChanged = await commitCameraSettings(settings);
-      setStatus(`Focus mode changed to ${focusMode}.`);
-      if (pipelineChanged) setStatus(`Focus mode changed to ${focusMode}; previous captures were cleared.`);
-    } catch (focusError) {
-      if (!isOperationCancellation(focusError)) setError(errorText(focusError));
-    } finally {
-      cameraBusyRef.current = false;
-      setCameraBusy(false);
-    }
-  }, [commitCameraSettings]);
-
   const storeObservation = useCallback(
     async (
       detection: DetectionResult,
@@ -986,6 +972,7 @@ export function App() {
       source: FrameObservation["source"],
       sourceName?: string,
       include = true,
+      exclusionReason?: string,
       generation = sessionGenerationRef.current,
     ): Promise<FrameObservation> => {
       const id = createId("view");
@@ -1026,6 +1013,7 @@ export function App() {
         imageBlobKey,
         thumbnailBlobKey,
         included: include,
+        autoExcludedReason: include ? undefined : exclusionReason,
       };
       setSession((previous) =>
         updated(previous, {
@@ -1044,21 +1032,44 @@ export function App() {
       if (captureBusyRef.current || importBusyRef.current) return;
       const detection = currentDetectionRef.current;
       const video = captureVideoRef.current;
-      if (!detection?.quality.basicValid || !isUsableDetection(detection) || !video) {
-        setStatus("A valid board detection is required before capture.");
+      if (!detection?.ok || !isUsableDetection(detection) || !video) {
+        setStatus("A board detection is required before capture.");
         return;
       }
-      if (sessionRef.current.observations.filter((view) => view.included).length >= 30) {
-        setStatus("The 30-view capture limit has been reached.");
+      if (sessionRef.current.observations.length >= MAX_SESSION_VIEWS) {
+        setStatus(`The ${MAX_SESSION_VIEWS}-view storage limit has been reached.`);
+        return;
+      }
+      if (
+        sessionRef.current.observations.filter((view) => view.included).length >=
+        MAX_INCLUDED_VIEWS
+      ) {
+        setStatus(`The ${MAX_INCLUDED_VIEWS}-view solve set is full.`);
         return;
       }
       captureBusyRef.current = true;
       const generation = sessionGenerationRef.current;
       try {
         const blob = await videoFrameBlob(video);
-        await storeObservation(detection, blob, "live", undefined, true, generation);
+        const include = detection.quality.basicValid;
+        const exclusionReason = include
+          ? undefined
+          : detection.quality.messages[0] ?? "Captured for manual review.";
+        await storeObservation(
+          detection,
+          blob,
+          "live",
+          undefined,
+          include,
+          exclusionReason,
+          generation,
+        );
         captureGateRef.current.markCaptured();
-        setStatus(`Captured view ${sessionRef.current.observations.length + 1}.`);
+        setStatus(
+          include
+            ? `Captured view ${sessionRef.current.observations.length + 1}.`
+            : `Saved view for review: ${exclusionReason}`,
+        );
       } catch (captureError) {
         if (!isOperationCancellation(captureError)) setError(errorText(captureError));
       } finally {
@@ -1137,7 +1148,16 @@ export function App() {
           time,
         );
         setCaptureDecision(decision);
-        if (autoCapture && decision.accept) await captureCurrentFrame();
+        const currentSession = sessionRef.current;
+        if (
+          autoCapture &&
+          decision.accept &&
+          currentSession.observations.length < MAX_SESSION_VIEWS &&
+          currentSession.observations.filter((view) => view.included).length <
+            MAX_INCLUDED_VIEWS
+        ) {
+          await captureCurrentFrame();
+        }
       } catch (detectionError) {
         if (!cancelled) {
           cancelled = true;
@@ -1171,7 +1191,7 @@ export function App() {
           file.size > 0 &&
           file.size <= MAX_FILE_BYTES,
       )
-      .slice(0, MAX_IMPORT_FILES);
+      .slice(0, MAX_SESSION_VIEWS);
     if (supported.length === 0) {
       setError("Choose JPEG, PNG, or WebP images no larger than 25 MB each.");
       importBusyRef.current = false;
@@ -1212,23 +1232,26 @@ export function App() {
       setError(undefined);
       try {
         let generation = sessionGenerationRef.current;
+        let initialObservationCount = sessionRef.current.observations.length;
         let initiallyIncluded = sessionRef.current.observations.filter(
           (view) => view.included,
         ).length;
         if (sessionRef.current.imageSize && !sameSize(sessionRef.current.imageSize, group)) {
           await clearObservations();
           generation = sessionGenerationRef.current;
+          initialObservationCount = 0;
           initiallyIncluded = 0;
           setStatus("Existing captures were cleared because the imported resolution is different.");
         }
         let accepted = 0;
+        let flagged = 0;
         let rejected = 0;
         let skippedByLimit = 0;
         for (const [index, file] of group.files.entries()) {
           if (generation !== sessionGenerationRef.current) {
             throw new SessionOperationCancelledError();
           }
-          if (initiallyIncluded + accepted >= 30) {
+          if (initialObservationCount + accepted + flagged >= MAX_SESSION_VIEWS) {
             skippedByLimit = group.files.length - index;
             break;
           }
@@ -1238,17 +1261,34 @@ export function App() {
           if (generation !== sessionGenerationRef.current) {
             throw new SessionOperationCancelledError();
           }
-          if (!detection.quality.basicValid || !isUsableDetection(detection)) {
+          if (!detection.ok || !isUsableDetection(detection)) {
             rejected += 1;
             continue;
           }
-          await storeObservation(detection, file, "upload", file.name, true, generation);
-          accepted += 1;
+          const include =
+            detection.quality.basicValid &&
+            initiallyIncluded + accepted < MAX_INCLUDED_VIEWS;
+          const exclusionReason = include
+            ? undefined
+            : detection.quality.basicValid
+              ? `Excluded because the ${MAX_INCLUDED_VIEWS}-view solve set is full.`
+              : detection.quality.messages[0] ?? "Flagged for manual review.";
+          await storeObservation(
+            detection,
+            file,
+            "upload",
+            file.name,
+            include,
+            exclusionReason,
+            generation,
+          );
+          if (include) accepted += 1;
+          else flagged += 1;
         }
         setImportGroups([]);
         setStatus(
-          `Imported ${accepted} valid views; ${rejected} images did not contain a usable board${
-            skippedByLimit ? `; ${skippedByLimit} images were not processed after reaching the 30-view limit` : ""
+          `Imported ${accepted} included views; ${flagged} flagged for review; ${rejected} images had no usable board detection${
+            skippedByLimit ? `; ${skippedByLimit} images were not processed after reaching the ${MAX_SESSION_VIEWS}-view storage limit` : ""
           }.`,
         );
       } catch (importError) {
@@ -1272,7 +1312,11 @@ export function App() {
         session.lensModel,
         session.pattern,
         session.imageSize,
-        session.captureSettings,
+        session.observations
+          .filter((observation) => observation.included)
+          .every((observation) => observation.source === "live")
+          ? session.captureSettings
+          : undefined,
       );
       if (generation !== sessionGenerationRef.current) return;
       const included = new Set(result.includedViewIds);
@@ -1291,7 +1335,7 @@ export function App() {
           })),
         }),
       );
-      setStatus("Calibration solved successfully.");
+      setStatus(undefined);
     } catch (solveError) {
       setError(errorText(solveError));
     } finally {
@@ -1312,6 +1356,86 @@ export function App() {
     }
   }, [worker, session.pattern]);
 
+  const exportCurrentSession = useCallback(async () => {
+    if (sessionPackageBusy) return;
+    setSessionPackageBusy(true);
+    setError(undefined);
+    try {
+      const archive = await createSessionPackage(sessionRef.current);
+      downloadBlob("camera-calibration-session.zip", archive);
+      setStatus("Session package exported.");
+    } catch (packageError) {
+      setError(errorText(packageError));
+    } finally {
+      setSessionPackageBusy(false);
+    }
+  }, [sessionPackageBusy]);
+
+  const exportSelectedResult = useCallback(async () => {
+    const result = sessionRef.current.result;
+    if (!result) return;
+    switch (exportFormat) {
+      case "json":
+        downloadText("camera-calibration.json", resultJson(result), "application/json");
+        break;
+      case "opencv-yaml":
+        downloadText("camera-calibration.yaml", toOpenCvYaml(result), "application/yaml");
+        break;
+      case "ros-yaml":
+        downloadText(
+          "camera-info.yaml",
+          toRosCameraInfoYaml(result),
+          "application/yaml",
+        );
+        break;
+      case "session-package":
+        await exportCurrentSession();
+        break;
+    }
+  }, [exportCurrentSession, exportFormat]);
+
+  const importSessionFile = useCallback(async (file?: File) => {
+    if (!file || sessionPackageBusy) return;
+    setSessionPackageBusy(true);
+    setError(undefined);
+    setStatus("Reading session package…");
+    try {
+      const imported = await readSessionPackage(file);
+      await replaceLocalSession(imported.session, imported.blobs);
+      sessionGenerationRef.current += 1;
+      clearTimeout(saveTimerRef.current);
+      cameraRef.current.stop();
+      if (setupVideoRef.current) setupVideoRef.current.srcObject = null;
+      if (captureVideoRef.current) captureVideoRef.current.srcObject = null;
+      setStream(undefined);
+      setSelectedDeviceId("");
+      setCurrentDetection(undefined);
+      currentDetectionRef.current = undefined;
+      setCaptureDecision(undefined);
+      drawDetection(overlayRef.current, undefined);
+      captureGateRef.current.reset();
+      setImportGroups([]);
+      importBusyRef.current = false;
+      setImportBusy(false);
+      setRestoreCandidate(undefined);
+      setRestoreResolved(true);
+      skipPristineSaveIdRef.current = undefined;
+      setSession(imported.session);
+      const importedSize = imported.session.captureSettings ?? imported.session.imageSize;
+      setResolutionDraft(
+        importedSize
+          ? { width: String(importedSize.width), height: String(importedSize.height) }
+          : { width: "", height: "" },
+      );
+      setStatus(`Session imported with ${imported.session.observations.length} views.`);
+    } catch (packageError) {
+      setStatus(undefined);
+      setError(errorText(packageError));
+    } finally {
+      setSessionPackageBusy(false);
+    }
+  }, [sessionPackageBusy]);
+
   const resetEverything = useCallback(async () => {
     sessionGenerationRef.current += 1;
     clearTimeout(saveTimerRef.current);
@@ -1319,7 +1443,8 @@ export function App() {
     if (setupVideoRef.current) setupVideoRef.current.srcObject = null;
     if (captureVideoRef.current) captureVideoRef.current.srcObject = null;
     setStream(undefined);
-    setCapabilities(undefined);
+    setSelectedDeviceId("");
+    setResolutionDraft({ width: "", height: "" });
     setError(undefined);
     try {
       await clearLocalSession();
@@ -1409,16 +1534,14 @@ export function App() {
               <div class="camera-controls">
                 <div class="form-grid">
                   <label class="field span-two"><span>Camera</span><select value={selectedDeviceId} disabled={cameraBusy} onChange={(event) => selectCamera(event.currentTarget.value)}><option value="">Default camera</option>{devices.map((device, index) => <option key={`${device.deviceId}-${index}`} value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>)}</select></label>
-                  <label class="field"><span>Width</span><input type="number" inputMode="numeric" min={capabilities?.width?.min ?? 1} max={capabilities?.width?.max ?? MAX_CAMERA_DIMENSION} step={1} placeholder="Camera default" value={resolutionDraft.width} disabled={cameraBusy} onInput={(event) => setResolutionDraft((previous) => ({ ...previous, width: event.currentTarget.value }))} /></label>
-                  <label class="field"><span>Height</span><input type="number" inputMode="numeric" min={capabilities?.height?.min ?? 1} max={capabilities?.height?.max ?? MAX_CAMERA_DIMENSION} step={1} placeholder="Camera default" value={resolutionDraft.height} disabled={cameraBusy} onInput={(event) => setResolutionDraft((previous) => ({ ...previous, height: event.currentTarget.value }))} /></label>
-                  {capabilities?.width && capabilities.height && <p class="resolution-bounds span-two">Reported bounds: width {capabilities.width.min}–{capabilities.width.max}; height {capabilities.height.min}–{capabilities.height.max}</p>}
+                  <label class="field"><span>Width</span><input type="number" inputMode="numeric" min={1} max={MAX_CAMERA_DIMENSION} step={1} placeholder="Camera default" value={resolutionDraft.width} disabled={cameraBusy} onInput={(event) => setResolutionDraft((previous) => ({ ...previous, width: event.currentTarget.value }))} /></label>
+                  <label class="field"><span>Height</span><input type="number" inputMode="numeric" min={1} max={MAX_CAMERA_DIMENSION} step={1} placeholder="Camera default" value={resolutionDraft.height} disabled={cameraBusy} onInput={(event) => setResolutionDraft((previous) => ({ ...previous, height: event.currentTarget.value }))} /></label>
                   {requestedResolution.error && <p class="field-error span-two">{requestedResolution.error}</p>}
                   <label class="field span-two"><span>Lens model</span><select value={session.lensModel} onChange={(event) => { const lensModel = event.currentTarget.value as LensModel; setSession((previous) => updated(previous, { lensModel, result: undefined })); }}><option value="pinhole-radtan5">Standard lens · radial/tangential 5</option><option value="fisheye-kb4">Fisheye · four coefficients</option></select></label>
                 </div>
                 {stream && <div class="button-row camera-mode-action"><button type="button" class="button secondary" disabled={cameraBusy || Boolean(requestedResolution.error) || !requestedResolution.size} onClick={() => void applyCameraSettings()}>{cameraBusy ? "Applying…" : "Apply resolution"}</button></div>}
               </div>
-              {session.captureSettings && <dl class="settings-summary"><div><dt>Actual stream</dt><dd>{session.captureSettings.width} × {session.captureSettings.height}</dd></div><div><dt>Frame rate</dt><dd>{session.captureSettings.frameRate?.toFixed(1) ?? "Browser default"}</dd></div><div><dt>Resize mode</dt><dd>{session.captureSettings.resizeMode ?? "Unverified"}</dd></div></dl>}
-              {capabilities?.focusMode && <label class="field"><span>Focus mode</span><select value={session.captureSettings?.focusMode} disabled={cameraBusy} onChange={(event) => void applyFocusMode(event.currentTarget.value)}>{capabilities.focusMode.map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select></label>}
+              {session.captureSettings && <dl class="settings-summary"><div><dt>Actual stream</dt><dd>{session.captureSettings.width} × {session.captureSettings.height}</dd></div><div><dt>Source scaling</dt><dd>{session.captureSettings.resizeMode === "none" ? "Unscaled" : session.captureSettings.resizeMode === "crop-and-scale" ? "Browser crop/scale" : session.captureSettings.resizeMode ?? "Not reported by browser"}</dd></div></dl>}
             </section>
 
             <PatternEditor pattern={session.pattern} onChange={setPattern} errors={patternErrors} workerReady={workerStatus === "ready"} onDownload={() => void downloadPattern()} onStart={() => setStep("capture")} />
@@ -1431,10 +1554,10 @@ export function App() {
               <div class="panel-heading"><h2>Capture</h2><label class="switch"><input type="checkbox" checked={autoCapture} onChange={(event) => setAutoCapture(event.currentTarget.checked)} /><span /> Auto capture</label></div>
               {stream ? <div class="camera-preview live"><video ref={captureVideoRef} autoplay muted playsinline /><canvas ref={overlayRef} /><div class="view-counter">{progress.accepted}<small>/ 20 views</small></div></div> : <div class="empty-capture"><span>Camera is not connected.</span><button type="button" class="button secondary" onClick={() => setStep("setup")}>Configure camera</button></div>}
               <div class="capture-message"><span class={currentDetection?.quality.basicValid ? "signal good" : "signal"} /> <strong>{captureDecision?.reasons[0] ?? "Show the entire board to the camera."}</strong></div>
-              <div class="button-row"><button type="button" class="button secondary" disabled={importBusy || !captureDecision?.basicValid || !stream || progress.accepted >= 30} onClick={() => void captureCurrentFrame()}>Capture now</button><label class={`button secondary file-button${importBusy ? " disabled" : ""}`}>Import images<input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={importBusy} onChange={(event) => { const input = event.currentTarget; const files = Array.from(input.files ?? []); input.value = ""; void chooseImportFiles(files); }} /></label><button type="button" class="button secondary" disabled={importBusy} onClick={() => setStep("setup")}>Camera settings</button><button type="button" class="button primary" disabled={importBusy || !progress.minimumReached} onClick={() => setStep("review")}>Review {progress.accepted} views</button></div>
+              <div class="button-row"><button type="button" class="button secondary" disabled={importBusy || !currentFrameUsable || !stream || session.observations.length >= MAX_SESSION_VIEWS || progress.accepted >= MAX_INCLUDED_VIEWS} onClick={() => void captureCurrentFrame()}>Capture now</button><label class={`button secondary file-button${importBusy ? " disabled" : ""}`}>Import images<input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={importBusy} onChange={(event) => { const input = event.currentTarget; const files = Array.from(input.files ?? []); input.value = ""; void chooseImportFiles(files); }} /></label><button type="button" class="button secondary" disabled={importBusy} onClick={() => setStep("setup")}>Camera settings</button><button type="button" class="button primary" disabled={importBusy || !progress.minimumReached} onClick={() => setStep("review")}>Review {progress.accepted} views</button></div>
               {importGroups.length > 0 && <div class="import-groups"><h3>Choose one resolution</h3>{importGroups.map((group) => <button key={group.key} type="button" disabled={importBusy} onClick={() => void processImportGroup(group)}><strong>{group.width} × {group.height}</strong><span>{group.files.length} images</span></button>)}</div>}
             </section>
-            <aside class="panel capture-guide"><h2>Coverage</h2><CoverageMetrics progress={progress} /><dl class="progress-list"><div><dt>Views</dt><dd>{progress.accepted} / 20</dd></div></dl><p class="capture-hint">Move the board across the frame. Vary size and perspective.</p>{progress.targetReached && <Status tone="success">Coverage target reached.</Status>}</aside>
+            <aside class="panel capture-guide"><h2>Capture guidance</h2><CoverageMetrics progress={progress} /><dl class="progress-list"><div><dt>Views</dt><dd>{progress.accepted} / 20</dd></div></dl><p class="capture-hint">Move the board across the frame. Vary size and perspective.</p></aside>
           </div>
         )}
 
@@ -1444,13 +1567,13 @@ export function App() {
             <section class="observation-grid" aria-label="Captured calibration views">
               {session.observations.map((observation, index) => (
                 <article key={observation.id} class={`observation-card ${observation.included ? "" : "excluded"}`}>
-                  <div class="observation-image"><ObservationThumbnail observation={observation} /><span>#{index + 1}</span></div>
+                  <div class="observation-image" style={{ aspectRatio: `${observation.imageSize.width} / ${observation.imageSize.height}` }}><ObservationThumbnail observation={observation} /><span>#{index + 1}</span></div>
                   <div class="observation-details">
                     <strong>{observation.sourceName ?? `${observation.source} capture`}</strong>
                     <small>{observation.quality.detectedCorners} corners · sharpness {observation.quality.sharpness.toFixed(0)}</small>
                     {observation.perViewRms !== undefined && <small>RMS {observation.perViewRms.toFixed(3)} px</small>}
                     {observation.autoExcludedReason && <small>{observation.autoExcludedReason}</small>}
-                    <label class="check"><input type="checkbox" checked={observation.included} disabled={solving} onChange={(event) => { const included = event.currentTarget.checked; setSession((previous) => updated(previous, { observations: previous.observations.map((candidate) => candidate.id === observation.id ? { ...candidate, included, autoExcludedReason: undefined } : candidate), result: undefined })); }} /> Include view</label>
+                    <label class="check"><input type="checkbox" checked={observation.included} disabled={solving || (!observation.included && progress.accepted >= MAX_INCLUDED_VIEWS)} onChange={(event) => { const included = event.currentTarget.checked; setSession((previous) => updated(previous, { observations: previous.observations.map((candidate) => candidate.id === observation.id ? { ...candidate, included, autoExcludedReason: undefined } : candidate), result: undefined })); }} /> Include view</label>
                   </div>
                 </article>
               ))}
@@ -1460,13 +1583,74 @@ export function App() {
 
         {session.step === "results" && session.result && (
           <div class="results-layout">
-            <section class="panel result-summary"><div class="result-title"><div><h2>{session.result.model === "pinhole-radtan5" ? "Standard lens" : "Fisheye"}</h2><p class="muted">{session.result.imageSize.width} × {session.result.imageSize.height} · OpenCV {session.result.generator.opencvVersion}</p></div><div class={`score ${session.result.rmsReprojectionError <= (session.result.model === "pinhole-radtan5" ? 0.5 : 0.8) ? "good" : "warn"}`}><strong>{session.result.rmsReprojectionError.toFixed(3)}</strong><span>px RMS</span></div></div><ResultMatrix result={session.result} /><div class="button-row"><button type="button" class="button secondary" onClick={() => downloadText("camera-calibration.json", resultJson(session.result!), "application/json")}>Export JSON</button><button type="button" class="button secondary" onClick={() => downloadText("camera-calibration.yaml", toOpenCvYaml(session.result!), "application/yaml")}>Export YAML</button><button type="button" class="button primary" onClick={() => setStep("review")}>Review views</button></div>{session.result.excludedViewIds.length > 0 && <Status>{session.result.excludedViewIds.length} unstable or high-error view(s) excluded.</Status>}</section>
+            <section class="panel result-summary">
+              <div class="result-title">
+                <div>
+                  <h2>{session.result.model === "pinhole-radtan5" ? "Standard lens" : "Fisheye"}</h2>
+                  <p class="muted">{session.result.imageSize.width} × {session.result.imageSize.height} · OpenCV {session.result.generator.opencvVersion}</p>
+                </div>
+                <div class="score"><strong>{session.result.rmsReprojectionError.toFixed(3)}</strong><span>px RMS</span></div>
+              </div>
+              <ResultMatrix result={session.result} />
+              <div class="export-row">
+                <label class="field export-format">
+                  <span>Export format</span>
+                  <select
+                    value={exportFormat}
+                    onChange={(event) => setExportFormat(event.currentTarget.value as ExportFormat)}
+                  >
+                    <option value="json">Calibration JSON</option>
+                    <option value="opencv-yaml">OpenCV YAML</option>
+                    <option value="ros-yaml">ROS camera_info YAML</option>
+                    <option value="session-package">Portable session package</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  class="button secondary"
+                  disabled={sessionPackageBusy}
+                  onClick={() => void exportSelectedResult()}
+                >
+                  {sessionPackageBusy ? "Preparing…" : "Download"}
+                </button>
+                <button type="button" class="button primary" onClick={() => setStep("review")}>Review views</button>
+              </div>
+              {session.result.excludedViewIds.length > 0 && <Status>{session.result.excludedViewIds.length} view(s) excluded from the result.</Status>}
+            </section>
             <LiveResultPreview stream={stream} result={session.result} worker={worker} />
+            <CalibrationDiagnostics result={session.result} observations={session.observations} />
+            <ValidationImagePreview result={session.result} worker={worker} />
           </div>
         )}
       </main>
 
-      <footer><button type="button" onClick={() => void resetEverything()}>Delete local data</button><div class="footer-meta"><a href="https://github.com/gmmyung/camera-calibration" target="_blank" rel="noopener noreferrer">GitHub</a><span>{opencvVersion ? `OpenCV ${opencvVersion}` : "OpenCV unavailable"}</span></div></footer>
+      <footer>
+        <div class="footer-actions">
+          <label class={`footer-file${sessionPackageBusy ? " disabled" : ""}`}>
+            Import session
+            <input
+              type="file"
+              accept=".zip,application/zip"
+              disabled={sessionPackageBusy}
+              onChange={(event) => {
+                const input = event.currentTarget;
+                const file = input.files?.[0];
+                input.value = "";
+                void importSessionFile(file);
+              }}
+            />
+          </label>
+          <button
+            type="button"
+            disabled={sessionPackageBusy}
+            onClick={() => void exportCurrentSession()}
+          >
+            Export session
+          </button>
+          <button type="button" disabled={sessionPackageBusy} onClick={() => void resetEverything()}>Delete local data</button>
+        </div>
+        <div class="footer-meta"><span>AI-assisted software; verify calibration results.</span><a href="https://github.com/gmmyung/camera-calibration" target="_blank" rel="noopener noreferrer">GitHub</a><span>{opencvVersion ? `OpenCV ${opencvVersion}` : "OpenCV unavailable"}</span></div>
+      </footer>
 
       {restoreCandidate && !restoreResolved && <div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="restore-title"><h2 id="restore-title">Restore session?</h2><p>{restoreCandidate.observations.length} views saved {new Date(restoreCandidate.updatedAt).toLocaleString()}.</p><div class="button-row"><button type="button" class="button secondary" disabled={restoreBusy} onClick={() => void discardRestore()}>{restoreBusy ? "Discarding…" : "Discard"}</button><button type="button" class="button primary" disabled={restoreBusy} onClick={() => { sessionGenerationRef.current += 1; setSession(restoreCandidate); setRestoreCandidate(undefined); setRestoreResolved(true); setStatus("Saved session restored."); }}>Restore</button></div></div></div>}
     </div>

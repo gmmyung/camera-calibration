@@ -42,6 +42,40 @@ export function resultJson(result: CalibrationResultV1): string {
   return `${JSON.stringify(result, null, 2)}\n`;
 }
 
+export function toRosCameraInfoYaml(
+  result: CalibrationResultV1,
+  cameraName = "camera",
+): string {
+  const projection = [
+    result.cameraMatrix[0], 0, result.cameraMatrix[2], 0,
+    0, result.cameraMatrix[4], result.cameraMatrix[5], 0,
+    0, 0, 1, 0,
+  ];
+  return [
+    `image_width: ${result.imageSize.width}`,
+    `image_height: ${result.imageSize.height}`,
+    `camera_name: ${yamlQuoted(cameraName)}`,
+    "camera_matrix:",
+    "  rows: 3",
+    "  cols: 3",
+    `  data: [${result.cameraMatrix.map(yamlNumber).join(", ")}]`,
+    `distortion_model: ${yamlQuoted(result.model === "fisheye-kb4" ? "equidistant" : "plumb_bob")}`,
+    "distortion_coefficients:",
+    "  rows: 1",
+    `  cols: ${result.distortion.length}`,
+    `  data: [${result.distortion.map(yamlNumber).join(", ")}]`,
+    "rectification_matrix:",
+    "  rows: 3",
+    "  cols: 3",
+    "  data: [1, 0, 0, 0, 1, 0, 0, 0, 1]",
+    "projection_matrix:",
+    "  rows: 3",
+    "  cols: 4",
+    `  data: [${projection.map(yamlNumber).join(", ")}]`,
+    "",
+  ].join("\n");
+}
+
 export function downloadText(filename: string, contents: string, type: string): void {
   const url = URL.createObjectURL(new Blob([contents], { type }));
   const anchor = document.createElement("a");

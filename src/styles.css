@@ -32,11 +32,6 @@
   --error-bg: #fae8e9;
   --error-text: #76262b;
   --error-line: #ad676b;
-  --success-bg: #e5f2e9;
-  --success-text: #225c36;
-  --success-line: #679a77;
-  --warning-bg: #f4eddd;
-  --warning-line: #a58a4d;
   --preview-bg: #090a0b;
   --overlay-bg: rgba(9, 10, 11, .9);
 }
@@ -74,11 +69,6 @@
     --error-bg: #29191a;
     --error-text: #f2c4c4;
     --error-line: #704346;
-    --success-bg: #17231b;
-    --success-text: #c6e5d0;
-    --success-line: #3f624c;
-    --warning-bg: #2a2418;
-    --warning-line: #695b3d;
   }
 }
 
@@ -168,9 +158,16 @@ main { flex: 1; padding: 28px 0 48px; }
 .span-two { grid-column: span 2; }
 .check { display: flex; align-items: center; gap: 8px; color: var(--label); font-size: 12px; }
 .check input, .switch input { accent-color: var(--accent); }
-.resolution-bounds, .field-error { margin: 0; font-size: 10px; line-height: 1.4; }
-.resolution-bounds { color: var(--muted); }
+.field-error { margin: 0; font-size: 10px; line-height: 1.4; }
 .field-error { color: var(--danger); }
+.advanced-settings { border-top: 1px solid var(--line); }
+.advanced-settings summary {
+  padding: 10px 0;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.advanced-settings[open] summary { margin-bottom: 10px; }
 
 .segmented { display: flex; border: 1px solid var(--line); }
 .segmented button {
@@ -254,7 +251,7 @@ main { flex: 1; padding: 28px 0 48px; }
 
 .settings-summary, .progress-list {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 1px;
   margin: 16px 0 0;
   border: 1px solid var(--line);
@@ -275,7 +272,6 @@ main { flex: 1; padding: 28px 0 48px; }
   font-size: 12px;
 }
 .status-error { border-color: var(--error-line); border-left-color: var(--danger); background: var(--error-bg); color: var(--error-text); }
-.status-success { border-color: var(--success-line); border-left-color: var(--success); background: var(--success-bg); color: var(--success-text); }
 
 .capture-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 12px; }
 .camera-preview.live { aspect-ratio: 16 / 9; }
@@ -346,7 +342,7 @@ main { flex: 1; padding: 28px 0 48px; }
 .observation-card { overflow: hidden; border: 1px solid var(--line); background: var(--panel); }
 .observation-card.excluded { opacity: .45; }
 .observation-image { position: relative; aspect-ratio: 4 / 3; background: var(--preview-bg); }
-.observation-image img, .image-placeholder { width: 100%; height: 100%; object-fit: cover; }
+.observation-image img, .image-placeholder { width: 100%; height: 100%; object-fit: contain; }
 .observation-image span { position: absolute; top: 6px; left: 6px; padding: 3px 5px; border: 1px solid #5a6167; background: var(--overlay-bg); color: #fff; font-size: 10px; }
 .observation-details { display: grid; gap: 5px; padding: 9px; }
 .observation-details strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
@@ -355,8 +351,7 @@ main { flex: 1; padding: 28px 0 48px; }
 .results-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .result-title { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
 .result-title .muted { margin: 5px 0 0; font-size: 12px; }
-.score { min-width: 92px; display: grid; justify-items: center; padding: 9px; border: 1px solid var(--warning-line); background: var(--warning-bg); color: var(--warning); }
-.score.good { border-color: var(--success-line); background: var(--success-bg); color: var(--success); }
+.score { min-width: 92px; display: grid; justify-items: center; padding: 9px; border: 1px solid var(--line); background: var(--surface); color: var(--text); }
 .score strong { font-size: 20px; }
 .score span { font-size: 9px; text-transform: uppercase; }
 .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin-top: 18px; border: 1px solid var(--line); background: var(--line); }
@@ -364,7 +359,42 @@ main { flex: 1; padding: 28px 0 48px; }
 .metric-grid .wide { grid-column: span 4; }
 .metric-grid span { color: var(--muted); font-size: 10px; }
 .metric-grid strong { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.export-row { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-top: 16px; }
+.export-format { min-width: 210px; flex: 1 1 210px; }
 .result-preview { aspect-ratio: 16 / 9; }
+.full-width { grid-column: 1 / -1; }
+.health-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+.health-metrics div { display: grid; gap: 4px; padding: 10px; background: var(--surface); }
+.health-metrics span { color: var(--muted); font-size: 10px; }
+.health-metrics strong { font-size: 12px; font-variant-numeric: tabular-nums; }
+.diagnostic-maps { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; }
+.diagnostic-map h3, .stability-summary h3, .subsection-title { margin: 0 0 8px; font-size: 12px; }
+.heatmap { display: grid; gap: 2px; aspect-ratio: 3 / 2; padding: 2px; border: 1px solid var(--line); background: var(--surface); }
+.heat-cell { min-width: 0; background: var(--button-bg); }
+.heat-cell.observed { background: var(--accent); }
+.stability-summary { margin-top: 18px; }
+.stability-summary dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin: 0; border: 1px solid var(--line); background: var(--line); }
+.stability-summary dl div { padding: 9px; background: var(--surface); }
+.stability-summary dt { color: var(--muted); font-size: 10px; }
+.stability-summary dd { margin: 3px 0 0; font-size: 12px; font-weight: 650; }
+.diagnostic-warnings { display: grid; gap: 6px; margin-top: 16px; }
+.diagnostic-warnings .status { margin: 0; }
+.subsection-title { margin-top: 20px; }
+.residual-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.residual-image img { object-fit: contain; }
+.residual-image svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.residual-image line { stroke: var(--danger); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.residual-image circle { fill: var(--accent); stroke: var(--preview-bg); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.validation-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.validation-grid figure { min-width: 0; margin: 0; border: 1px solid var(--line); background: var(--preview-bg); }
+.validation-grid img, .validation-grid canvas, .validation-grid .image-placeholder { width: 100%; display: block; object-fit: contain; }
+.validation-grid figcaption { padding: 7px 9px; border-top: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 10px; }
 .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; opacity: 0; pointer-events: none; }
 
 footer {
@@ -378,6 +408,10 @@ footer {
   font-size: 10px;
 }
 footer button, footer a { padding: 4px 7px; border: 0; border-bottom: 1px solid var(--faint); background: transparent; color: var(--muted); cursor: pointer; }
+.footer-actions { display: flex; align-items: center; gap: 8px; }
+.footer-file { padding: 4px 7px; border-bottom: 1px solid var(--faint); cursor: pointer; }
+.footer-file input { display: none; }
+.footer-file.disabled, footer button:disabled { opacity: .4; cursor: not-allowed; }
 .footer-meta { display: flex; align-items: center; gap: 14px; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 20px; background: rgba(0,0,0,.78); }
 .modal { width: min(440px, 100%); padding: 22px; border: 1px solid var(--line); background: var(--panel); }
@@ -389,6 +423,7 @@ footer button, footer a { padding: 4px 7px; border: 0; border-bottom: 1px solid 
   .review-summary { grid-template-columns: 1fr minmax(220px, 300px); }
   .review-summary .button-row { grid-column: 1 / -1; }
   .observation-grid { grid-template-columns: repeat(3, 1fr); }
+  .health-metrics { grid-template-columns: repeat(2, 1fr); }
 }
 
 @media (max-width: 640px) {
@@ -407,5 +442,9 @@ footer button, footer a { padding: 4px 7px; border: 0; border-bottom: 1px solid 
   .observation-grid { grid-template-columns: repeat(2, 1fr); }
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
   .metric-grid .wide { grid-column: span 2; }
+  .diagnostic-maps, .validation-grid { grid-template-columns: 1fr; }
+  .stability-summary dl { grid-template-columns: 1fr; }
+  .residual-grid { grid-template-columns: 1fr; }
   footer { flex-wrap: wrap; justify-content: center; padding: 12px 0; }
+  .footer-actions, .footer-meta { flex-wrap: wrap; justify-content: center; }
 }

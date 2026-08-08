@@ -121,6 +121,21 @@ export interface ViewPose {
   translationVector: [number, number, number];
 }
 
+export interface PointResidual {
+  pointId: number;
+  observed: Point2;
+  projected: Point2;
+  magnitude: number;
+}
+
+export interface CalibrationStability {
+  method: "leave-one-view-out";
+  attemptedSamples: number;
+  successfulSamples: number;
+  standardDeviations: number[];
+  maxAbsoluteDeltas: number[];
+}
+
 export interface CalibrationResultV1 {
   schemaVersion: 1;
   generator: {
@@ -140,6 +155,10 @@ export interface CalibrationResultV1 {
   board: PatternConfig;
   captureSettings?: CameraSettingsSnapshot;
   poses: ViewPose[];
+  /** Present on newly solved results. Optional so existing saved sessions remain readable. */
+  residuals?: Record<string, PointResidual[]>;
+  /** Leave-one-view-out parameter variation, ordered as fx, fy, cx, cy, then distortion. */
+  stability?: CalibrationStability;
 }
 
 export interface CalibrationSessionV1 {
@@ -159,7 +178,6 @@ export interface CalibrationSessionV1 {
 export interface CaptureProgress {
   accepted: number;
   minimumReached: boolean;
-  targetReached: boolean;
   horizontal: number;
   vertical: number;
   size: number;

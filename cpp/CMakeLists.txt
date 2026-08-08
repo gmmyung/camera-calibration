@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(lensbench_calibration_wasm LANGUAGES CXX)
+project(camera_calibration_wasm LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

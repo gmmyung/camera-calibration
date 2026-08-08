@@ -73,6 +73,12 @@ describe("stored session validation", () => {
         observations: [observation, { ...observation }],
       }),
     ).toBeUndefined();
+    expect(
+      parseStoredSession({
+        ...session,
+        observations: [{ ...observation, thumbnailBlobKey: observation.imageBlobKey }],
+      }),
+    ).toBeUndefined();
   });
 
   it("rejects non-finite values, invalid patterns, and inconsistent image sizes", () => {
@@ -83,6 +89,23 @@ describe("stored session validation", () => {
           {
             ...observation,
             imagePoints: [{ x: Number.NaN, y: 0 }, ...observation.imagePoints.slice(1)],
+          },
+        ],
+      }),
+    ).toBeUndefined();
+    expect(
+      parseStoredSession({
+        ...session,
+        observations: [{ ...observation, pose: { ...observation.pose, centerX: 2 } }],
+      }),
+    ).toBeUndefined();
+    expect(
+      parseStoredSession({
+        ...session,
+        observations: [
+          {
+            ...observation,
+            imagePoints: [{ x: 10_000, y: 100 }, ...observation.imagePoints.slice(1)],
           },
         ],
       }),
@@ -100,6 +123,7 @@ describe("stored session validation", () => {
 
   it("rejects a results step without a calibration result", () => {
     expect(parseStoredSession({ ...session, step: "results" })).toBeUndefined();
+    expect(parseStoredSession({ ...session, imageSize: undefined })).toBeUndefined();
   });
 
   it("accepts a complete result and rejects inconsistent result metadata", () => {
@@ -128,6 +152,22 @@ describe("stored session validation", () => {
         rotationVector: [0, 0, 0],
         translationVector: [0, 0, 1],
       })),
+      residuals: Object.fromEntries(observations.map((view) => [
+        view.id,
+        view.imagePoints.map((observed, pointIndex) => ({
+          pointId: view.pointIds[pointIndex],
+          observed,
+          projected: { x: observed.x + 0.25, y: observed.y },
+          magnitude: 0.25,
+        })),
+      ])),
+      stability: {
+        method: "leave-one-view-out" as const,
+        attemptedSamples: 12,
+        successfulSamples: 12,
+        standardDeviations: [1, 1, 0.5, 0.5, 0.001, 0.001, 0.001, 0.001, 0.001],
+        maxAbsoluteDeltas: [2, 2, 1, 1, 0.002, 0.002, 0.002, 0.002, 0.002],
+      },
     };
     const completed = { ...session, step: "results", observations, result };
     expect(parseStoredSession(completed)).toEqual(completed);
@@ -135,6 +175,31 @@ describe("stored session validation", () => {
       parseStoredSession({
         ...completed,
         result: { ...result, board: { ...CHARUCO_PRESET, squaresX: 6 } },
+      }),
+    ).toBeUndefined();
+    expect(
+      parseStoredSession({
+        ...completed,
+        result: {
+          ...result,
+          perViewErrors: Object.fromEntries(includedViewIds.slice(1).map((id) => [id, 0.3])),
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      parseStoredSession({
+        ...completed,
+        result: {
+          ...result,
+          residuals: {
+            ...result.residuals,
+            [includedViewIds[0]!]: result.residuals[includedViewIds[0]!]!.map((residual) => ({
+              ...residual,
+              observed: { x: residual.observed.x + 10, y: residual.observed.y },
+              projected: { x: residual.projected.x + 10, y: residual.projected.y },
+            })),
+          },
+        },
       }),
     ).toBeUndefined();
   });

@@ -70,6 +70,7 @@ describe("application shell", () => {
     expect(screen.getByRole("link", { name: "GitHub" }).getAttribute("href")).toBe(
       "https://github.com/gmmyung/camera-calibration",
     );
+    expect(screen.getByText("AI-assisted software; verify calibration results.")).toBeTruthy();
   });
 
   it("refreshes the reported stream dimensions when an exact mode is rejected", async () => {
@@ -113,6 +114,10 @@ describe("application shell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Connect camera" }));
     await waitFor(() => expect(screen.getByText("640 × 480")).toBeTruthy());
+    expect(screen.getByText("Not reported by browser")).toBeTruthy();
+    expect(screen.queryByText(/reported bounds/i)).toBeNull();
+    expect(screen.getByLabelText("Width").getAttribute("max")).toBe("32768");
+    expect(screen.getByLabelText("Height").getAttribute("max")).toBe("32768");
     expect(screen.queryByRole("slider")).toBeNull();
     expect(screen.queryByText(/zoom/i)).toBeNull();
 

@@ -39,6 +39,7 @@ struct Observation {
   std::string id;
   std::vector<cv::Point2f> image_points;
   std::vector<cv::Point3f> object_points;
+  std::vector<int> point_ids;
 };
 
 struct SolveState {
@@ -47,7 +48,15 @@ struct SolveState {
   std::vector<cv::Mat> rotation_vectors;
   std::vector<cv::Mat> translation_vectors;
   std::vector<double> errors;
+  std::vector<std::vector<cv::Point2f>> projected_points;
   double rms = std::numeric_limits<double>::quiet_NaN();
+};
+
+struct StabilityState {
+  int attempted_samples = 0;
+  int successful_samples = 0;
+  std::vector<double> standard_deviations;
+  std::vector<double> max_absolute_deltas;
 };
 
 cv::aruco::PredefinedDictionaryType dictionary_type(const std::string& name) {
@@ -518,6 +527,7 @@ std::vector<Observation> parse_observations(const val& input, int width, int hei
     }
     observation.image_points.reserve(point_count);
     observation.object_points.reserve(point_count);
+    observation.point_ids.reserve(point_count);
     std::set<int> unique_point_ids;
     for (int point_index = 0; point_index < point_count; ++point_index) {
       const val image_point = image_points[point_index];
@@ -542,6 +552,7 @@ std::vector<Observation> parse_observations(const val& input, int width, int hei
           finite_coordinate(object_point["x"], "Object point"),
           finite_coordinate(object_point["y"], "Object point"),
           finite_coordinate(object_point["z"], "Object point"));
+      observation.point_ids.push_back(point_id);
     }
     observations.push_back(std::move(observation));
   }
@@ -621,6 +632,7 @@ SolveState solve_subset(const std::vector<Observation>& observations,
   }
 
   state.errors.reserve(active.size());
+  state.projected_points.reserve(active.size());
   double total_squared_error = 0.0;
   std::size_t total_points = 0;
   for (std::size_t local_index = 0; local_index < active.size(); ++local_index) {
@@ -637,6 +649,7 @@ SolveState solve_subset(const std::vector<Observation>& observations,
     }
     const double error = view_error(image_points[local_index], projected);
     state.errors.push_back(error);
+    state.projected_points.push_back(std::move(projected));
     total_squared_error += error * error * image_points[local_index].size();
     total_points += image_points[local_index].size();
   }
@@ -656,6 +669,70 @@ double median(std::vector<double> values) {
   if (values.size() % 2 == 1) return upper;
   std::nth_element(values.begin(), values.begin() + middle - 1, values.end());
   return (upper + values[middle - 1]) / 2.0;
+}
+
+std::vector<double> calibration_parameters(const SolveState& state) {
+  std::vector<double> parameters = {
+      state.camera_matrix.at<double>(0, 0), state.camera_matrix.at<double>(1, 1),
+      state.camera_matrix.at<double>(0, 2), state.camera_matrix.at<double>(1, 2)};
+  parameters.insert(parameters.end(), state.distortion.begin<double>(),
+                    state.distortion.end<double>());
+  return parameters;
+}
+
+StabilityState leave_one_view_out_stability(const std::vector<Observation>& observations,
+                                            const std::vector<int>& active,
+                                            const std::string& model,
+                                            const cv::Size& image_size,
+                                            const SolveState& final_state) {
+  StabilityState stability;
+  if (active.size() <= 12) return stability;
+
+  constexpr int kMaximumSamples = 12;
+  stability.attempted_samples =
+      std::min(kMaximumSamples, static_cast<int>(active.size()));
+  std::vector<std::vector<double>> samples;
+  samples.reserve(stability.attempted_samples);
+  for (int sample_index = 0; sample_index < stability.attempted_samples; ++sample_index) {
+    const std::size_t position = stability.attempted_samples == 1
+                                     ? 0
+                                     : static_cast<std::size_t>(std::llround(
+                                           sample_index * (active.size() - 1.0) /
+                                           (stability.attempted_samples - 1.0)));
+    std::vector<int> subset = active;
+    subset.erase(subset.begin() + static_cast<std::ptrdiff_t>(position));
+    try {
+      samples.push_back(
+          calibration_parameters(solve_subset(observations, subset, model, image_size)));
+    } catch (const cv::Exception&) {
+      // A failed subset is itself useful context; report it through the sample counts.
+    } catch (const std::runtime_error&) {
+      // A failed subset is itself useful context; report it through the sample counts.
+    }
+  }
+
+  stability.successful_samples = static_cast<int>(samples.size());
+  if (samples.size() < 3) return stability;
+  const std::vector<double> final_parameters = calibration_parameters(final_state);
+  stability.standard_deviations.resize(final_parameters.size(), 0.0);
+  stability.max_absolute_deltas.resize(final_parameters.size(), 0.0);
+  for (std::size_t parameter = 0; parameter < final_parameters.size(); ++parameter) {
+    double mean = 0.0;
+    for (const auto& sample : samples) mean += sample[parameter];
+    mean /= samples.size();
+    double squared_deviation = 0.0;
+    double maximum_delta = 0.0;
+    for (const auto& sample : samples) {
+      const double centered = sample[parameter] - mean;
+      squared_deviation += centered * centered;
+      maximum_delta =
+          std::max(maximum_delta, std::abs(sample[parameter] - final_parameters[parameter]));
+    }
+    stability.standard_deviations[parameter] =
+        std::sqrt(squared_deviation / (samples.size() - 1));
+    stability.max_absolute_deltas[parameter] = maximum_delta;
+  }
+  return stability;
 }
 
 int failed_fisheye_view(const cv::Exception& error) {
@@ -756,6 +833,20 @@ val solve_calibration(const val& input,
   }
   result.set("rmsReprojectionError", state.rms);
 
+  const StabilityState stability = leave_one_view_out_stability(
+      observations, active, model, cv::Size(width, height), state);
+  if (stability.attempted_samples > 0) {
+    val stability_value = val::object();
+    stability_value.set("method", std::string("leave-one-view-out"));
+    stability_value.set("attemptedSamples", stability.attempted_samples);
+    stability_value.set("successfulSamples", stability.successful_samples);
+    stability_value.set("standardDeviations",
+                        number_array(stability.standard_deviations));
+    stability_value.set("maxAbsoluteDeltas",
+                        number_array(stability.max_absolute_deltas));
+    result.set("stability", stability_value);
+  }
+
   val errors = val::object();
   for (const auto& [id, error] : all_errors) errors.set(id, error);
   result.set("perViewErrors", errors);
@@ -763,6 +854,7 @@ val solve_calibration(const val& input,
   val included_ids = val::array();
   val excluded_ids = val::array();
   val poses = val::array();
+  val residuals = val::object();
   for (std::size_t local_index = 0; local_index < active.size(); ++local_index) {
     const Observation& observation = observations[active[local_index]];
     included_ids.call<void>("push", observation.id);
@@ -777,11 +869,33 @@ val solve_calibration(const val& input,
     pose.set("rotationVector", number_array(rotation));
     pose.set("translationVector", number_array(translation));
     poses.call<void>("push", pose);
+
+    val view_residuals = val::array();
+    const auto& projected_points = state.projected_points[local_index];
+    for (std::size_t point_index = 0; point_index < observation.image_points.size();
+         ++point_index) {
+      const cv::Point2f observed = observation.image_points[point_index];
+      const cv::Point2f projected = projected_points[point_index];
+      val residual = val::object();
+      residual.set("pointId", observation.point_ids[point_index]);
+      val observed_value = val::object();
+      observed_value.set("x", observed.x);
+      observed_value.set("y", observed.y);
+      val projected_value = val::object();
+      projected_value.set("x", projected.x);
+      projected_value.set("y", projected.y);
+      residual.set("observed", observed_value);
+      residual.set("projected", projected_value);
+      residual.set("magnitude", cv::norm(projected - observed));
+      view_residuals.call<void>("push", residual);
+    }
+    residuals.set(observation.id, view_residuals);
   }
   for (const int index : excluded) excluded_ids.call<void>("push", observations[index].id);
   result.set("includedViewIds", included_ids);
   result.set("excludedViewIds", excluded_ids);
   result.set("poses", poses);
+  result.set("residuals", residuals);
   return result;
 }
 
@@ -992,7 +1106,7 @@ std::string opencv_version() { return CV_VERSION; }
 
 }  // namespace
 
-EMSCRIPTEN_BINDINGS(lensbench_calibration) {
+EMSCRIPTEN_BINDINGS(camera_calibration) {
   emscripten::function("getOpenCvVersion", &opencv_version);
   emscripten::function("detectFrame", &detect_frame);
   emscripten::function("solveCalibration", &solve_calibration);

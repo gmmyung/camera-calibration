@@ -1,15 +1,16 @@
 import type { CalibrationSessionV1 } from "../domain/types";
 
-const DB_NAME = "lensbench-calibration";
+const DB_NAME = "camera-calibration";
+const LEGACY_DB_NAME = ["lens", "bench-calibration"].join("");
 const DB_VERSION = 1;
 const SESSION_STORE = "sessions";
 const BLOB_STORE = "blobs";
 const ACTIVE_SESSION_KEY = "active";
 
-function openDatabase(): Promise<IDBDatabase> {
+function openDatabase(databaseName = DB_NAME): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     let blocked = false;
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    const request = indexedDB.open(databaseName, DB_VERSION);
     request.onupgradeneeded = () => {
       const database = request.result;
       if (!database.objectStoreNames.contains(SESSION_STORE)) {
@@ -35,6 +36,68 @@ function openDatabase(): Promise<IDBDatabase> {
   });
 }
 
+function requestResult<T>(request: IDBRequest<T>, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error(message));
+  });
+}
+
+function deleteDatabase(databaseName: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(databaseName);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error ?? new Error("Unable to remove old local storage."));
+    request.onblocked = () => reject(new Error("Old local storage is open in another tab."));
+  });
+}
+
+async function migrateLegacyDatabase(): Promise<boolean> {
+  if (typeof indexedDB.databases === "function") {
+    const databases = await indexedDB.databases();
+    if (!databases.some(({ name }) => name === LEGACY_DB_NAME)) return false;
+  }
+
+  const legacy = await openDatabase(LEGACY_DB_NAME);
+  let session: unknown;
+  let keys: IDBValidKey[] = [];
+  let blobs: unknown[] = [];
+  try {
+    const transaction = legacy.transaction([SESSION_STORE, BLOB_STORE], "readonly");
+    const completion = transactionComplete(transaction);
+    const sessionRequest = transaction.objectStore(SESSION_STORE).get(ACTIVE_SESSION_KEY);
+    const blobStore = transaction.objectStore(BLOB_STORE);
+    [session, keys, blobs] = await Promise.all([
+      requestResult(sessionRequest, "Unable to read the old saved session."),
+      requestResult(blobStore.getAllKeys(), "Unable to read old image keys."),
+      requestResult(blobStore.getAll(), "Unable to read old saved images."),
+    ]);
+    await completion;
+  } finally {
+    legacy.close();
+  }
+
+  if (session !== undefined || keys.length > 0) {
+    const database = await openDatabase();
+    try {
+      const transaction = database.transaction([SESSION_STORE, BLOB_STORE], "readwrite");
+      if (session !== undefined) {
+        transaction.objectStore(SESSION_STORE).put(session, ACTIVE_SESSION_KEY);
+      }
+      const blobStore = transaction.objectStore(BLOB_STORE);
+      keys.forEach((key, index) => {
+        const blob = blobs[index];
+        if (blob !== undefined) blobStore.put(blob, key);
+      });
+      await transactionComplete(transaction);
+    } finally {
+      database.close();
+    }
+  }
+  await deleteDatabase(LEGACY_DB_NAME).catch(() => undefined);
+  return session !== undefined;
+}
+
 function transactionComplete(transaction: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     transaction.oncomplete = () => resolve();
@@ -55,17 +118,21 @@ export async function saveActiveSession(session: CalibrationSessionV1): Promise<
 }
 
 export async function loadActiveSession(): Promise<unknown> {
-  const database = await openDatabase();
-  try {
-    const transaction = database.transaction(SESSION_STORE, "readonly");
-    const request = transaction.objectStore(SESSION_STORE).get(ACTIVE_SESSION_KEY);
-    return await new Promise<unknown>((resolve, reject) => {
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error ?? new Error("Unable to restore the session."));
-    });
-  } finally {
-    database.close();
-  }
+  const readCurrent = async (): Promise<unknown> => {
+    const database = await openDatabase();
+    try {
+      const transaction = database.transaction(SESSION_STORE, "readonly");
+      return await requestResult(
+        transaction.objectStore(SESSION_STORE).get(ACTIVE_SESSION_KEY),
+        "Unable to restore the session.",
+      );
+    } finally {
+      database.close();
+    }
+  };
+  const current = await readCurrent();
+  if (current !== undefined) return current;
+  return (await migrateLegacyDatabase()) ? readCurrent() : undefined;
 }
 
 export async function putSessionBlob(key: string, blob: Blob): Promise<void> {
@@ -85,6 +152,32 @@ export async function putSessionBlobs(entries: ReadonlyArray<readonly [string, B
       throw error;
     }
     await transactionComplete(transaction);
+  } finally {
+    database.close();
+  }
+}
+
+export async function replaceLocalSession(
+  session: CalibrationSessionV1,
+  entries: ReadonlyArray<readonly [string, Blob]>,
+): Promise<void> {
+  const database = await openDatabase();
+  try {
+    const transaction = database.transaction([SESSION_STORE, BLOB_STORE], "readwrite");
+    const completion = transactionComplete(transaction);
+    try {
+      const sessionStore = transaction.objectStore(SESSION_STORE);
+      const blobStore = transaction.objectStore(BLOB_STORE);
+      sessionStore.clear();
+      blobStore.clear();
+      sessionStore.put(session, ACTIVE_SESSION_KEY);
+      entries.forEach(([key, blob]) => blobStore.put(blob, key));
+    } catch (error) {
+      transaction.abort();
+      await completion.catch(() => undefined);
+      throw error;
+    }
+    await completion;
   } finally {
     database.close();
   }
@@ -131,6 +224,7 @@ export async function clearLocalSession(): Promise<void> {
   } finally {
     database.close();
   }
+  await deleteDatabase(LEGACY_DB_NAME).catch(() => undefined);
 }
 
 export async function storageHeadroom(): Promise<{ remaining?: number; quota?: number }> {

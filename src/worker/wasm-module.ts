@@ -1,10 +1,12 @@
 import type {
+  CalibrationStability,
   CalibrationResultV1,
   DetectionResult,
   FrameObservation,
   ImageSize,
   LensModel,
   PatternConfig,
+  PointResidual,
 } from "../domain/types";
 
 export interface NativeCalibrationResult {
@@ -19,6 +21,8 @@ export interface NativeCalibrationResult {
   includedViewIds: string[];
   excludedViewIds: string[];
   poses: CalibrationResultV1["poses"];
+  residuals: Record<string, PointResidual[]>;
+  stability?: CalibrationStability;
 }
 
 export interface NativeUndistortedFrame {
@@ -84,11 +88,121 @@ function validVector(value: unknown): value is [number, number, number] {
   return finiteArray(value, 3);
 }
 
+function finitePoint(value: unknown): value is { x: number; y: number } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "x" in value &&
+    "y" in value &&
+    typeof value.x === "number" &&
+    Number.isFinite(value.x) &&
+    typeof value.y === "number" &&
+    Number.isFinite(value.y)
+  );
+}
+
 function uniqueKnownIds(value: unknown, knownIds: Set<string>): value is string[] {
   return (
     Array.isArray(value) &&
     value.every((id) => typeof id === "string" && knownIds.has(id)) &&
     new Set(value).size === value.length
+  );
+}
+
+function validResiduals(
+  value: unknown,
+  includedIds: Set<string>,
+  observations: Map<string, FrameObservation>,
+): value is Record<string, PointResidual[]> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const entries = Object.entries(value);
+  if (
+    entries.length !== includedIds.size ||
+    entries.some(([viewId]) => !includedIds.has(viewId))
+  ) {
+    return false;
+  }
+  return entries.every(([viewId, residuals]) => {
+    const observation = observations.get(viewId);
+    if (!observation || !Array.isArray(residuals) || residuals.length !== observation.pointIds.length) {
+      return false;
+    }
+    const knownPointIds = new Set(observation.pointIds);
+    const residualPointIds = new Set<number>();
+    return residuals.every((residual) => {
+      if (
+        typeof residual !== "object" ||
+        residual === null ||
+        !("pointId" in residual) ||
+        !Number.isInteger(residual.pointId) ||
+        !knownPointIds.has(residual.pointId as number) ||
+        residualPointIds.has(residual.pointId as number) ||
+        !("observed" in residual) ||
+        !finitePoint(residual.observed) ||
+        !("projected" in residual) ||
+        !finitePoint(residual.projected) ||
+        !("magnitude" in residual) ||
+        typeof residual.magnitude !== "number" ||
+        !Number.isFinite(residual.magnitude) ||
+        residual.magnitude < 0
+      ) {
+        return false;
+      }
+      const measured = Math.hypot(
+        residual.projected.x - residual.observed.x,
+        residual.projected.y - residual.observed.y,
+      );
+      const pointIndex = observation.pointIds.indexOf(residual.pointId as number);
+      const sourcePoint = observation.imagePoints[pointIndex];
+      const sourceTolerance = sourcePoint
+        ? Math.max(
+            1e-3,
+            Math.max(Math.abs(sourcePoint.x), Math.abs(sourcePoint.y)) * 1e-6,
+          )
+        : 1e-3;
+      if (
+        !sourcePoint ||
+        Math.abs(sourcePoint.x - residual.observed.x) > sourceTolerance ||
+        Math.abs(sourcePoint.y - residual.observed.y) > sourceTolerance
+      ) {
+        return false;
+      }
+      if (Math.abs(measured - residual.magnitude) > Math.max(1e-3, measured * 1e-5)) {
+        return false;
+      }
+      residualPointIds.add(residual.pointId as number);
+      return true;
+    });
+  });
+}
+
+function validStability(value: unknown, parameterCount: number): value is CalibrationStability {
+  if (value === undefined) return false;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  if (
+    !("method" in value) ||
+    value.method !== "leave-one-view-out" ||
+    !("attemptedSamples" in value) ||
+    !Number.isInteger(value.attemptedSamples) ||
+    (value.attemptedSamples as number) < 1 ||
+    (value.attemptedSamples as number) > 12 ||
+    !("successfulSamples" in value) ||
+    !Number.isInteger(value.successfulSamples) ||
+    (value.successfulSamples as number) < 0 ||
+    (value.successfulSamples as number) > (value.attemptedSamples as number) ||
+    !("standardDeviations" in value) ||
+    !Array.isArray(value.standardDeviations) ||
+    !("maxAbsoluteDeltas" in value) ||
+    !Array.isArray(value.maxAbsoluteDeltas)
+  ) {
+    return false;
+  }
+  const expectedLength = (value.successfulSamples as number) >= 3 ? parameterCount : 0;
+  return (
+    finiteArray(value.standardDeviations, expectedLength) &&
+    value.standardDeviations.every((entry) => entry >= 0) &&
+    finiteArray(value.maxAbsoluteDeltas, expectedLength) &&
+    value.maxAbsoluteDeltas.every((entry) => entry >= 0)
   );
 }
 
@@ -193,6 +307,16 @@ export function calibrationResultFromNative(
   ) {
     throw new Error("OpenCV returned invalid camera poses.");
   }
+  const observationsById = new Map(observations.map((observation) => [observation.id, observation]));
+  if (!validResiduals(native.residuals, includedIds, observationsById)) {
+    throw new Error("OpenCV returned invalid reprojection residuals.");
+  }
+  if (
+    native.stability !== undefined &&
+    !validStability(native.stability, 4 + expectedCoefficients)
+  ) {
+    throw new Error("OpenCV returned invalid calibration stability data.");
+  }
   const included = new Set(native.includedViewIds);
   return {
     schemaVersion: 1,
@@ -218,6 +342,8 @@ export function calibrationResultFromNative(
     board: pattern,
     captureSettings,
     poses: native.poses,
+    residuals: native.residuals,
+    stability: native.stability,
   };
 }
 

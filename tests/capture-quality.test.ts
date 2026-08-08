@@ -92,17 +92,16 @@ describe("CaptureGate", () => {
 });
 
 describe("captureProgress", () => {
-  it("recognizes a geometrically diverse 20-view set", () => {
+  it("summarizes a geometrically diverse 20-view set", () => {
     const result = captureProgress(Array.from({ length: 20 }, (_, index) => observation(index)));
     expect(result.accepted).toBe(20);
     expect(result.horizontal).toBe(1);
     expect(result.vertical).toBe(1);
     expect(result.size).toBe(1);
     expect(result.skew).toBe(1);
-    expect(result.targetReached).toBe(true);
   });
 
-  it("does not accept a pile of centered front-facing views as complete coverage", () => {
+  it("shows the missing range in centered front-facing views", () => {
     const views = Array.from({ length: 20 }, (_, index) => {
       const view = observation(index);
       view.pose = {
@@ -120,6 +119,5 @@ describe("captureProgress", () => {
     expect(result.horizontal).toBe(0);
     expect(result.vertical).toBe(0);
     expect(result.skew).toBe(0);
-    expect(result.targetReached).toBe(false);
   });
 });

@@ -216,12 +216,9 @@ export function captureProgress(observations: FrameObservation[]): CaptureProgre
   const vertical = clamp01(range(ys) / VERTICAL_RANGE_TARGET);
   const size = clamp01((sizes.length > 0 ? Math.max(...sizes) : 0) / SIZE_TARGET);
   const skew = clamp01((skews.length > 0 ? Math.max(...skews) : 0) / SKEW_TARGET);
-  const targetReached =
-    included.length >= 20 && horizontal === 1 && vertical === 1 && size === 1 && skew === 1;
   return {
     accepted: included.length,
     minimumReached: included.length >= 12,
-    targetReached,
     horizontal,
     vertical,
     size,

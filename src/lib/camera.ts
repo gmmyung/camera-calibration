@@ -7,17 +7,8 @@ export interface CameraRequest {
   frameRate?: number;
 }
 
-export type ExtendedCapabilities = MediaTrackCapabilities & {
-  focusMode?: string[];
-};
-
-interface ExtendedConstraintSet extends MediaTrackConstraintSet {
-  focusMode?: ConstrainDOMString;
-}
-
 interface ExtendedConstraints extends MediaTrackConstraints {
   resizeMode?: ConstrainDOMString;
-  advanced?: ExtendedConstraintSet[];
 }
 
 interface ExtendedSupportedConstraints extends MediaTrackSupportedConstraints {
@@ -47,7 +38,9 @@ function hasExactSettings(
   resizeModeSupported: boolean,
 ): boolean {
   return (
-    (!resizeModeSupported || settings.resizeMode === "none") &&
+    (!resizeModeSupported ||
+      settings.resizeMode === undefined ||
+      settings.resizeMode === "none") &&
     (!requestedSize ||
       (settings.width === requestedSize.width && settings.height === requestedSize.height))
   );
@@ -76,6 +69,9 @@ function validateImageSize(size: ImageSize): void {
     size.height > 32_768
   ) {
     throw new Error("Camera dimensions must be positive whole numbers no larger than 32768.");
+  }
+  if (size.width * size.height > 40_000_000) {
+    throw new Error("The camera mode exceeds the 40-megapixel processing limit.");
   }
 }
 
@@ -140,6 +136,7 @@ class CameraOperationCancelledError extends Error {
 export class CameraController {
   private stream?: MediaStream;
   private track?: MediaStreamTrack;
+  private unscaledConstraintApplied = false;
   private operationId = 0;
 
   async open(request: CameraRequest): Promise<MediaStream> {
@@ -159,6 +156,7 @@ export class CameraController {
     this.assertCurrent(operationId, capture.stream);
     this.stream = capture.stream;
     this.track = capture.track;
+    this.unscaledConstraintApplied = resizeModeSupported;
     return capture.stream;
   }
 
@@ -180,29 +178,6 @@ export class CameraController {
     );
   }
 
-  async applyFocusMode(focusMode: string): Promise<CameraSettingsSnapshot> {
-    if (!focusMode) throw new Error("Camera focus mode is required.");
-    const track = this.requireTrack();
-    const operationId = this.operationId;
-    const current = this.settingsForTrack(track);
-    const resizeModeSupported = supportsResizeMode();
-    await track.applyConstraints({
-      width: { exact: current.width },
-      height: { exact: current.height },
-      ...unscaledCaptureConstraint(resizeModeSupported),
-      advanced: [{ focusMode }],
-    } as ExtendedConstraints);
-    this.assertActiveTrack(operationId, track);
-    return this.settledExactSettings(track, current, resizeModeSupported, () =>
-      this.assertActiveTrack(operationId, track),
-    );
-  }
-
-  capabilities(): ExtendedCapabilities | undefined {
-    if (!this.track || typeof this.track.getCapabilities !== "function") return undefined;
-    return this.track.getCapabilities() as ExtendedCapabilities;
-  }
-
   settings(): CameraSettingsSnapshot {
     return this.settingsForTrack(this.requireTrack());
   }
@@ -220,6 +195,7 @@ export class CameraController {
     const activeStream = this.stream;
     this.stream = undefined;
     this.track = undefined;
+    this.unscaledConstraintApplied = false;
     stopStream(activeStream);
     return Boolean(activeStream);
   }
@@ -288,6 +264,7 @@ export class CameraController {
     if (!settings.width || !settings.height) {
       throw new Error("The browser did not report the active camera dimensions.");
     }
+    validateImageSize({ width: settings.width, height: settings.height });
     return {
       width: settings.width,
       height: settings.height,
@@ -295,7 +272,9 @@ export class CameraController {
       frameRate: settings.frameRate,
       aspectRatio: settings.aspectRatio,
       facingMode: settings.facingMode,
-      resizeMode: settings.resizeMode,
+      resizeMode:
+        settings.resizeMode ??
+        (track === this.track && this.unscaledConstraintApplied ? "none" : undefined),
       zoom: settings.zoom,
       focusMode: settings.focusMode,
       cameraLabel: track.label || undefined,
@@ -329,7 +308,11 @@ export class CameraController {
     requestedSize?: ImageSize,
     resizeModeSupported = supportsResizeMode(),
   ): void {
-    if (resizeModeSupported && settings.resizeMode !== "none") {
+    if (
+      resizeModeSupported &&
+      settings.resizeMode !== undefined &&
+      settings.resizeMode !== "none"
+    ) {
       throw new Error("The browser did not provide an uncropped, unscaled camera stream.");
     }
     if (

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CHARUCO_PRESET } from "../src/domain/patterns";
 import type { CalibrationResultV1 } from "../src/domain/types";
-import { resultJson, toOpenCvYaml } from "../src/lib/exports";
+import { resultJson, toOpenCvYaml, toRosCameraInfoYaml } from "../src/lib/exports";
 
 const result: CalibrationResultV1 = {
   schemaVersion: 1,
@@ -42,5 +42,22 @@ describe("calibration exports", () => {
     expect(yaml).toContain("-2.5e-12");
     expect(yaml).toContain("1.25e+20");
     expect(yaml).not.toContain("e-1,");
+  });
+
+  it("writes ROS camera_info YAML for both lens models", () => {
+    const standard = toRosCameraInfoYaml(result, "front camera");
+    expect(standard).toContain('camera_name: "front camera"');
+    expect(standard).toContain('distortion_model: "plumb_bob"');
+    expect(standard).toContain("rows: 3");
+    expect(standard).toContain("cols: 4");
+    expect(standard).toContain("data: [900, 0, 640, 0, 0, 901, 360, 0, 0, 0, 1, 0]");
+
+    const fisheye = toRosCameraInfoYaml({
+      ...result,
+      model: "fisheye-kb4",
+      distortion: [-0.1, 0.02, -0.001, 0.0001],
+    });
+    expect(fisheye).toContain('distortion_model: "equidistant"');
+    expect(fisheye).toContain("cols: 4");
   });
 });
