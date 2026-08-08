@@ -1,4 +1,9 @@
-import type { DictionaryName, PatternConfig } from "./types";
+import { validatePattern } from "./patterns";
+import {
+  DICTIONARY_NAMES,
+  type DictionaryName,
+  type PatternConfig,
+} from "./types";
 
 export const MAX_DISPLAY_BOARD_EDGE = 32_768;
 
@@ -22,6 +27,69 @@ export interface DisplayBoardGeometry {
   boardHeightPixels: number;
   boardWidthCss: number;
   boardHeightCss: number;
+}
+
+export function displayBoardUrl(pattern: PatternConfig, baseUrl: string): string {
+  const url = new URL(baseUrl);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("view", "board");
+  url.searchParams.set("type", pattern.kind);
+  if (pattern.kind === "charuco") {
+    url.searchParams.set("columns", String(pattern.squaresX));
+    url.searchParams.set("rows", String(pattern.squaresY));
+    url.searchParams.set("dictionary", pattern.dictionary);
+    url.searchParams.set("legacy", pattern.legacyPattern ? "1" : "0");
+  } else {
+    url.searchParams.set("columns", String(pattern.innerCornersX));
+    url.searchParams.set("rows", String(pattern.innerCornersY));
+  }
+  return url.href;
+}
+
+function wholeNumberParameter(parameters: URLSearchParams, name: string): number {
+  const text = parameters.get(name);
+  const value = text === null ? Number.NaN : Number(text);
+  if (!Number.isInteger(value)) throw new Error("Invalid display board link.");
+  return value;
+}
+
+export function patternFromDisplayBoardUrl(url: URL): PatternConfig {
+  if (url.searchParams.get("view") !== "board") {
+    throw new Error("Not a display board link.");
+  }
+  const kind = url.searchParams.get("type");
+  const columns = wholeNumberParameter(url.searchParams, "columns");
+  const rows = wholeNumberParameter(url.searchParams, "rows");
+  let pattern: PatternConfig;
+  if (kind === "charuco") {
+    const dictionary = url.searchParams.get("dictionary");
+    const legacy = url.searchParams.get("legacy");
+    if (
+      !dictionary ||
+      !DICTIONARY_NAMES.includes(dictionary as DictionaryName) ||
+      (legacy !== "0" && legacy !== "1")
+    ) {
+      throw new Error("Invalid display board link.");
+    }
+    pattern = {
+      kind,
+      squaresX: columns,
+      squaresY: rows,
+      dictionary: dictionary as DictionaryName,
+      legacyPattern: legacy === "1",
+    };
+  } else if (kind === "chessboard") {
+    pattern = {
+      kind,
+      innerCornersX: columns,
+      innerCornersY: rows,
+    };
+  } else {
+    throw new Error("Invalid display board link.");
+  }
+  if (validatePattern(pattern).length > 0) throw new Error("Invalid display board link.");
+  return pattern;
 }
 
 export function dictionaryModuleCount(dictionary: DictionaryName): number {

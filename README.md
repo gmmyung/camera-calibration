@@ -11,7 +11,7 @@ There is no runtime server. Camera frames, imported images, observations, and re
 - Standard five-coefficient radial/tangential and four-coefficient fisheye models
 - ChArUco and chessboard presets plus custom row and column counts
 - SVG board export
-- Viewport-fitted fullscreen display boards
+- Board-only display tabs with viewport fitting and fullscreen control
 - Robust reprojection-error filtering with reviewable exclusions
 - Point-coverage and residual maps, worst-view overlays, and leave-one-view-out stability
 - Live and independent-image undistortion previews
@@ -44,7 +44,7 @@ The first connection leaves dimensions unset unless the user enters them, allowi
 
 ## Display targets
 
-The display board fills the available browser viewport while preserving complete board squares and marker modules. Fullscreen is requested when available; otherwise it uses the current window.
+**Open board in new tab** launches a separate board-only view. The board fills the available viewport while preserving complete board squares and marker modules; a fullscreen control is included when the browser supports it.
 
 Physical square size is not required to solve camera intrinsics. Object points and pose translations use board-square units, so translation values are relative to one square rather than millimetres.
 

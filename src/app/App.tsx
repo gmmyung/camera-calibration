@@ -15,6 +15,7 @@ import {
   validatePattern,
 } from "../domain/patterns";
 import { parseStoredSession } from "../domain/session";
+import { displayBoardUrl } from "../domain/display-board";
 import {
   DICTIONARY_NAMES,
   type AppStep,
@@ -59,7 +60,6 @@ import { createSessionPackage, readSessionPackage } from "../lib/session-package
 import { WebGlUndistortRenderer } from "../lib/undistort-webgl";
 import { CalibrationWorkerClient } from "../worker/client";
 import { CalibrationDiagnostics } from "./CalibrationDiagnostics";
-import { DisplayTargetPanel } from "./DisplayTargetPanel";
 import { ObservationThumbnail } from "./ObservationThumbnail";
 import { ValidationImagePreview } from "./ValidationImagePreview";
 
@@ -275,6 +275,7 @@ function PatternEditor({
   workerReady,
   onDownload,
   onStart,
+  displayHref,
 }: {
   pattern: PatternConfig;
   onChange: (pattern: PatternConfig) => void;
@@ -282,6 +283,7 @@ function PatternEditor({
   workerReady: boolean;
   onDownload: () => void;
   onStart: () => void;
+  displayHref: string;
 }) {
   return (
     <section class="panel pattern-panel">
@@ -391,6 +393,15 @@ function PatternEditor({
         >
           Download board SVG
         </button>
+        <a
+          class={`button secondary${!workerReady || errors.length > 0 ? " disabled" : ""}`}
+          href={workerReady && errors.length === 0 ? displayHref : undefined}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-disabled={!workerReady || errors.length > 0}
+        >
+          Open board in new tab
+        </a>
         <button
           type="button"
           class="button primary"
@@ -1520,7 +1531,7 @@ export function App() {
               {session.captureSettings && <dl class="settings-summary"><div><dt>Actual stream</dt><dd>{session.captureSettings.width} × {session.captureSettings.height}</dd></div><div><dt>Source scaling</dt><dd>{session.captureSettings.resizeMode === "none" ? "Unscaled" : session.captureSettings.resizeMode === "crop-and-scale" ? "Browser crop/scale" : session.captureSettings.resizeMode ?? "Not reported by browser"}</dd></div></dl>}
             </section>
 
-            <PatternEditor pattern={session.pattern} onChange={setPattern} errors={patternErrors} workerReady={workerStatus === "ready"} onDownload={() => void downloadPattern()} onStart={() => setStep("capture")} />
+            <PatternEditor pattern={session.pattern} onChange={setPattern} errors={patternErrors} workerReady={workerStatus === "ready"} onDownload={() => void downloadPattern()} onStart={() => setStep("capture")} displayHref={displayBoardUrl(session.pattern, document.baseURI)} />
           </div>
         )}
 
@@ -1599,13 +1610,6 @@ export function App() {
           </div>
         )}
 
-        <DisplayTargetPanel
-          settingsVisible={session.step === "setup"}
-          pattern={session.pattern}
-          worker={worker}
-          workerReady={workerStatus === "ready" && patternErrors.length === 0}
-          onStartCapture={() => setStep("capture")}
-        />
       </main>
 
       <footer>

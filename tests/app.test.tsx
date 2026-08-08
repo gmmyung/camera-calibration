@@ -73,7 +73,8 @@ describe("application shell", () => {
       expect((button as HTMLButtonElement).disabled).toBe(false);
     });
     expect(screen.getByRole("heading", { name: "Calibration board" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Display board" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Display board" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Open board in new tab" })).toBeTruthy();
     expect(screen.queryByLabelText("Display profile")).toBeNull();
     expect(screen.queryByLabelText("Display preset")).toBeNull();
     expect(screen.queryByText(/ppi|ruler|square size|marker size/i)).toBeNull();
@@ -154,18 +155,21 @@ describe("application shell", () => {
     expect((screen.getByLabelText("Height") as HTMLInputElement).value).toBe("600");
   });
 
-  it("keeps a fullscreen display target mounted after capture starts", async () => {
+  it("links to a board-only tab without leaving setup", async () => {
     render(<App />);
     await waitFor(() => {
       expect((screen.getByRole("button", { name: "Download board SVG" }) as HTMLButtonElement).disabled).toBe(false);
     });
     fireEvent.click(screen.getByRole("button", { name: "Chessboard" }));
-    const displayButton = screen.getByRole("button", { name: "Display board" });
-    expect((displayButton as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(displayButton);
-    await waitFor(() => {
-      expect(screen.getByRole("dialog", { name: "Calibration board display" })).toBeTruthy();
-      expect(screen.getByRole("heading", { name: "Capture" })).toBeTruthy();
-    });
+    const displayLink = screen.getByRole("link", { name: "Open board in new tab" });
+    const targetUrl = new URL(displayLink.getAttribute("href")!);
+    expect(displayLink.getAttribute("target")).toBe("_blank");
+    expect(displayLink.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(targetUrl.searchParams.get("view")).toBe("board");
+    expect(targetUrl.searchParams.get("type")).toBe("chessboard");
+    expect(targetUrl.searchParams.get("columns")).toBe("9");
+    expect(targetUrl.searchParams.get("rows")).toBe("6");
+    expect(screen.getByRole("heading", { name: "Calibration board" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Capture" })).toBeNull();
   });
 });
