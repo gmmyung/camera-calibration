@@ -201,7 +201,15 @@ function humanBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function Stepper({ step }: { step: AppStep }) {
+function Stepper({
+  step,
+  canNavigate,
+  onNavigate,
+}: {
+  step: AppStep;
+  canNavigate: (step: AppStep) => boolean;
+  onNavigate: (step: AppStep) => void;
+}) {
   const steps: Array<{ id: AppStep; label: string }> = [
     { id: "setup", label: "Set up" },
     { id: "capture", label: "Capture" },
@@ -214,11 +222,27 @@ function Stepper({ step }: { step: AppStep }) {
       {steps.map((candidate, index) => (
         <li
           key={candidate.id}
-          class={index === activeIndex ? "active" : index < activeIndex ? "complete" : ""}
-          aria-current={index === activeIndex ? "step" : undefined}
+          class={
+            index === activeIndex
+              ? "active"
+              : index < activeIndex
+                ? "complete"
+                : canNavigate(candidate.id)
+                  ? "available"
+                  : ""
+          }
         >
-          <span>{index + 1}</span>
-          {candidate.label}
+          <button
+            type="button"
+            disabled={!canNavigate(candidate.id)}
+            aria-current={index === activeIndex ? "step" : undefined}
+            onClick={() => {
+              if (candidate.id !== step) onNavigate(candidate.id);
+            }}
+          >
+            <span aria-hidden="true">{index + 1}</span>
+            {candidate.label}
+          </button>
         </li>
       ))}
     </ol>
@@ -1549,6 +1573,12 @@ export function App() {
   }, [restoreBusy]);
 
   const setStep = (step: AppStep) => setSession((previous) => updated(previous, { step }));
+  const canNavigateToStep = (step: AppStep): boolean => {
+    if (step === session.step || step === "setup") return true;
+    if (step === "capture") return workerStatus === "ready" && patternErrors.length === 0;
+    if (step === "review") return session.observations.length > 0;
+    return session.result !== undefined;
+  };
   const setPattern = (pattern: PatternConfig) => {
     sessionGenerationRef.current += 1;
     const observations = sessionRef.current.observations;
@@ -1575,7 +1605,7 @@ export function App() {
 
       <main>
         <p class="configuration-summary">{patternLabel(session.pattern)} · {session.lensModel === "pinhole-radtan5" ? "Standard lens" : "Fisheye"}</p>
-        <Stepper step={session.step} />
+        <Stepper step={session.step} canNavigate={canNavigateToStep} onNavigate={setStep} />
 
         {error && <Status tone="error">{error}</Status>}
         {status && <Status>{status}</Status>}

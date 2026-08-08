@@ -236,6 +236,26 @@ describe("application shell", () => {
     expect((screen.getByLabelText("Height") as HTMLInputElement).value).toBe("600");
   });
 
+  it("navigates between available steps without bypassing prerequisites", async () => {
+    render(<App />);
+
+    const setupStep = screen.getByRole("button", { name: "Set up" });
+    const captureStep = screen.getByRole("button", { name: "Capture" });
+    const reviewStep = screen.getByRole("button", { name: "Review" });
+    const resultsStep = screen.getByRole("button", { name: "Results" });
+    expect(setupStep.getAttribute("aria-current")).toBe("step");
+    expect((reviewStep as HTMLButtonElement).disabled).toBe(true);
+    expect((resultsStep as HTMLButtonElement).disabled).toBe(true);
+    await waitFor(() => expect((captureStep as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(captureStep);
+    expect(screen.getByRole("heading", { name: "Capture" })).toBeTruthy();
+    expect(captureStep.getAttribute("aria-current")).toBe("step");
+    fireEvent.click(setupStep);
+    expect(screen.getByRole("heading", { name: "Calibration board" })).toBeTruthy();
+    expect(setupStep.getAttribute("aria-current")).toBe("step");
+  });
+
   it("links to a board-only tab without leaving setup", async () => {
     render(<App />);
     await waitFor(() => {
@@ -261,6 +281,16 @@ describe("application shell", () => {
 
     const restore = await screen.findByRole("button", { name: "Restore" });
     fireEvent.click(restore);
+    await screen.findByRole("button", { name: "New calibration" });
+    const setupStep = screen.getByRole("button", { name: "Set up" });
+    const resultsStep = screen.getByRole("button", { name: "Results" });
+    expect(resultsStep.getAttribute("aria-current")).toBe("step");
+    expect((screen.getByRole("button", { name: "Review" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    fireEvent.click(setupStep);
+    expect(screen.getByRole("heading", { name: "Calibration board" })).toBeTruthy();
+    fireEvent.click(resultsStep);
     const newCalibration = await screen.findByRole("button", { name: "New calibration" });
     fireEvent.click(newCalibration);
 

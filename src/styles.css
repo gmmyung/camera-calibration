@@ -113,18 +113,31 @@ main { flex: 1; padding: 28px 0 48px; }
 }
 .stepper li {
   min-height: 38px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
   border-right: 1px solid var(--line);
   color: var(--faint);
   font-size: 12px;
 }
 .stepper li:last-child { border-right: 0; }
+.stepper button {
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.stepper button:disabled { cursor: not-allowed; }
 .stepper li span { color: inherit; font-variant-numeric: tabular-nums; }
 .stepper li.active { color: var(--text); border-bottom: 2px solid var(--accent); background: var(--panel-alt); }
 .stepper li.complete { color: var(--muted); }
+.stepper li.available { color: var(--muted); }
+.stepper li.available button:hover { background: var(--button-hover); color: var(--text); }
 
 .panel {
   padding: 18px;
@@ -458,7 +471,8 @@ footer button, footer a { padding: 4px 7px; border: 0; border-bottom: 1px solid 
   .app-shell { width: min(100% - 20px, 1200px); }
   .site-header { min-height: 48px; }
   main { padding-top: 20px; }
-  .stepper li { justify-content: center; padding: 0 5px; font-size: 11px; }
+  .stepper li { font-size: 11px; }
+  .stepper button { justify-content: center; padding: 0 5px; }
   .stepper li span { display: none; }
   .panel { padding: 13px; }
   .form-grid { grid-template-columns: 1fr; }
