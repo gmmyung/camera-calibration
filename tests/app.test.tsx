@@ -89,6 +89,7 @@ describe("application shell", () => {
       getCapabilities: vi.fn(() => ({
         width: { min: 1, max: 4224 },
         height: { min: 1, max: 4224 },
+        zoom: { min: 1, max: 4, step: 0.1 },
       })),
       applyConstraints: vi.fn(async () => {
         settings = { ...settings, width: 800, height: 450 };
@@ -112,6 +113,8 @@ describe("application shell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Connect camera" }));
     await waitFor(() => expect(screen.getByText("640 × 480")).toBeTruthy());
+    expect(screen.queryByRole("slider")).toBeNull();
+    expect(screen.queryByText(/zoom/i)).toBeNull();
 
     fireEvent.input(screen.getByLabelText("Width"), { target: { value: "800" } });
     fireEvent.input(screen.getByLabelText("Height"), { target: { value: "600" } });

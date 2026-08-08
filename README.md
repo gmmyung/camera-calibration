@@ -37,7 +37,7 @@ npm run dev
 
 The camera API requires HTTPS or `localhost`. If `public/wasm/calibration.js` and `calibration.wasm` have not been built, the UI loads but reports that the calibration engine is unavailable.
 
-The first connection leaves dimensions unset unless the user enters them, allowing the camera to choose its default mode. Once connected, the width and height fields show the active mode and the track's reported bounds. Entered dimensions are required exactly; the tool does not fall back to browser-selected dimensions. Where supported, camera requests also require `resizeMode: { exact: "none" }` and verify that setting. Browsers without `resizeMode` support can still connect, but the resize mode is shown as **Unverified** because the Web API cannot prove that the browser avoided cropping or downscaling. **Actual stream** shows the settings used for calibration. Changing the camera, resolution, zoom, focus mode, or resize mode clears incompatible captures.
+The first connection leaves dimensions unset unless the user enters them, allowing the camera to choose its default mode. Once connected, the width and height fields show the active mode and the track's reported bounds. Entered dimensions are required exactly; the tool does not fall back to browser-selected dimensions. Where supported, camera requests also require `resizeMode: { exact: "none" }` and verify that setting. Browsers without `resizeMode` support can still connect, but the resize mode is shown as **Unverified** because the Web API cannot prove that the browser avoided cropping or downscaling. **Actual stream** shows the settings used for calibration. Changing the camera, resolution, focus mode, or resize mode clears incompatible captures.
 
 ## Verification
 

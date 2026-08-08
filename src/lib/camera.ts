@@ -7,19 +7,11 @@ export interface CameraRequest {
   frameRate?: number;
 }
 
-export interface NumericCapability {
-  min: number;
-  max: number;
-  step?: number;
-}
-
 export type ExtendedCapabilities = MediaTrackCapabilities & {
-  zoom?: NumericCapability;
   focusMode?: string[];
 };
 
 interface ExtendedConstraintSet extends MediaTrackConstraintSet {
-  zoom?: ConstrainDouble;
   focusMode?: ConstrainDOMString;
 }
 
@@ -184,24 +176,6 @@ export class CameraController {
     } as ExtendedConstraints);
     this.assertActiveTrack(operationId, track);
     return this.settledExactSettings(track, size, resizeModeSupported, () =>
-      this.assertActiveTrack(operationId, track),
-    );
-  }
-
-  async applyZoom(zoom: number): Promise<CameraSettingsSnapshot> {
-    if (!Number.isFinite(zoom)) throw new Error("Camera zoom must be a finite number.");
-    const track = this.requireTrack();
-    const operationId = this.operationId;
-    const current = this.settingsForTrack(track);
-    const resizeModeSupported = supportsResizeMode();
-    await track.applyConstraints({
-      width: { exact: current.width },
-      height: { exact: current.height },
-      ...unscaledCaptureConstraint(resizeModeSupported),
-      advanced: [{ zoom }],
-    } as ExtendedConstraints);
-    this.assertActiveTrack(operationId, track);
-    return this.settledExactSettings(track, current, resizeModeSupported, () =>
       this.assertActiveTrack(operationId, track),
     );
   }

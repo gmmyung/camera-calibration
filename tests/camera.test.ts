@@ -298,7 +298,7 @@ describe("CameraController", () => {
           finishAdjustment = resolve;
         }),
     );
-    const adjustment = controller.applyZoom(2);
+    const adjustment = controller.applyFocusMode("manual");
     const rejection = expect(adjustment).rejects.toThrow("cancelled");
     controller.stop();
     finishAdjustment?.();
