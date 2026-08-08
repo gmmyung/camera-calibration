@@ -70,7 +70,7 @@ describe("application shell", () => {
     expect(screen.getByRole("link", { name: "GitHub" }).getAttribute("href")).toBe(
       "https://github.com/gmmyung/camera-calibration",
     );
-    expect(screen.getByText("AI-assisted software; verify calibration results.")).toBeTruthy();
+    expect(screen.queryByText("AI-assisted software; verify calibration results.")).toBeNull();
   });
 
   it("refreshes the reported stream dimensions when an exact mode is rejected", async () => {
