@@ -75,7 +75,7 @@ describe("application shell", () => {
     expect(screen.getByRole("heading", { name: "Calibration board" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Display board" })).toBeTruthy();
     expect(screen.getByLabelText("Display profile")).toBeTruthy();
-    expect(screen.getByLabelText("Monitor specification")).toBeTruthy();
+    expect(screen.getByLabelText("Display preset")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Verify with ruler" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Target" })).toBeNull();
     expect(screen.getByLabelText("Columns (squares)").getAttribute("max")).toBe("30");
@@ -161,7 +161,7 @@ describe("application shell", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Chessboard" }));
     fireEvent.input(screen.getByLabelText("Square size (mm)"), { target: { value: "10" } });
-    fireEvent.change(screen.getByLabelText("Monitor specification"), {
+    fireEvent.change(screen.getByLabelText("Display preset"), {
       target: { value: "24-1920x1080" },
     });
     const displayButton = screen.getByRole("button", { name: "Display board" });
@@ -175,7 +175,7 @@ describe("application shell", () => {
 
   it("stores a ruler-verified display profile", async () => {
     render(<App />);
-    fireEvent.change(screen.getByLabelText("Monitor specification"), {
+    fireEvent.change(screen.getByLabelText("Display preset"), {
       target: { value: "27-2560x1440" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Verify with ruler" }));
@@ -187,6 +187,19 @@ describe("application shell", () => {
     await waitFor(() => {
       expect(screen.getByText("Verified")).toBeTruthy();
       expect((screen.getByLabelText("Display profile") as HTMLSelectElement).value).not.toBe("");
+    });
+  });
+
+  it("applies an Apple display preset using its published pixel density", async () => {
+    render(<App />);
+    fireEvent.change(screen.getByLabelText("Display preset"), {
+      target: { value: "iphone-air" },
+    });
+    await waitFor(() => {
+      expect((screen.getByLabelText("Native width") as HTMLInputElement).value).toBe("1260");
+      expect((screen.getByLabelText("Native height") as HTMLInputElement).value).toBe("2736");
+      expect((screen.getByLabelText("Physical size from") as HTMLSelectElement).value).toBe("pixel-density");
+      expect((screen.getByLabelText("Pixel density (ppi)") as HTMLInputElement).value).toBe("460");
     });
   });
 });

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import {
+  DISPLAY_SPECIFICATION_PRESET_GROUPS,
   DISPLAY_SPECIFICATION_PRESETS,
   MAX_DISPLAY_PATTERN_EDGE,
   displayEnvironment,
@@ -33,6 +34,7 @@ interface ProfileDraft {
   diagonalInches: string;
   activeWidthMm: string;
   activeHeightMm: string;
+  pixelsPerInch: string;
   verification?: DisplayVerification;
 }
 
@@ -56,6 +58,7 @@ function blankDraft(environment: DisplayEnvironment): ProfileDraft {
     diagonalInches: "",
     activeWidthMm: "",
     activeHeightMm: "",
+    pixelsPerInch: "",
   };
 }
 
@@ -75,6 +78,9 @@ function profileDraft(profile: DisplayProfile): ProfileDraft {
     activeHeightMm: profile.specification.activeHeightMm === undefined
       ? ""
       : String(profile.specification.activeHeightMm),
+    pixelsPerInch: profile.specification.pixelsPerInch === undefined
+      ? ""
+      : String(profile.specification.pixelsPerInch),
     verification: profile.verification,
   };
 }
@@ -98,6 +104,9 @@ function parseDraft(draft: ProfileDraft): ParsedDraft {
       : undefined,
     activeHeightMm: draft.sizeSource === "active-area"
       ? finiteNumber(draft.activeHeightMm)
+      : undefined,
+    pixelsPerInch: draft.sizeSource === "pixel-density"
+      ? finiteNumber(draft.pixelsPerInch)
       : undefined,
   };
   const errors = validateDisplaySpecification(specification);
@@ -190,17 +199,31 @@ export function DisplayTargetPanel({
   const rasterMatches = parsed.profile
     ? displayRasterMatchesSpecification(environment, parsed.profile.specification)
     : false;
+  const viewportWidth = window.visualViewport?.width || window.innerWidth || environment.cssWidth;
+  const viewportHeight = window.visualViewport?.height || window.innerHeight || environment.cssHeight;
   const targetFits = Boolean(
     geometry &&
-    geometry.boardWidthPixels / environment.devicePixelRatio <= environment.cssWidth - 24 &&
-    geometry.boardHeightPixels / environment.devicePixelRatio <= environment.cssHeight - 72
+    geometry.boardWidthPixels / environment.devicePixelRatio <= viewportWidth - 24 &&
+    geometry.boardHeightPixels / environment.devicePixelRatio <= viewportHeight - 72
   );
 
   useEffect(() => {
     const refreshEnvironment = () => setEnvironment(currentDisplayEnvironment());
+    let ratioQuery: MediaQueryList | undefined;
+    const handleRatioChange = () => {
+      refreshEnvironment();
+      ratioQuery?.removeEventListener("change", handleRatioChange);
+      ratioQuery = window.matchMedia?.(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+      ratioQuery?.addEventListener("change", handleRatioChange);
+    };
+    if (window.matchMedia) {
+      ratioQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+      ratioQuery.addEventListener("change", handleRatioChange);
+    }
     window.addEventListener("resize", refreshEnvironment);
     window.visualViewport?.addEventListener("resize", refreshEnvironment);
     return () => {
+      ratioQuery?.removeEventListener("change", handleRatioChange);
       window.removeEventListener("resize", refreshEnvironment);
       window.visualViewport?.removeEventListener("resize", refreshEnvironment);
     };
@@ -264,6 +287,7 @@ export function DisplayTargetPanel({
       diagonalInches: String(preset.specification.diagonalInches ?? ""),
       activeWidthMm: "",
       activeHeightMm: "",
+      pixelsPerInch: String(preset.specification.pixelsPerInch ?? ""),
       verification: undefined,
     }));
   };
@@ -389,10 +413,16 @@ export function DisplayTargetPanel({
           </select>
         </label>
         <label class="field span-two">
-          <span>Monitor specification</span>
+          <span>Display preset</span>
           <select value={presetId} onChange={(event) => applyPreset(event.currentTarget.value)}>
             <option value="">Custom</option>
-            {DISPLAY_SPECIFICATION_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+            {DISPLAY_SPECIFICATION_PRESET_GROUPS.map((group) => (
+              <optgroup key={group} label={group}>
+                {DISPLAY_SPECIFICATION_PRESETS.filter((preset) => preset.group === group).map((preset) => (
+                  <option key={preset.id} value={preset.id}>{preset.label}</option>
+                ))}
+              </optgroup>
+            ))}
           </select>
         </label>
         <label class="field span-two">
@@ -412,6 +442,7 @@ export function DisplayTargetPanel({
           <select value={draft.sizeSource} onChange={(event) => updateSpecification({ sizeSource: event.currentTarget.value as DisplaySizeSource })}>
             <option value="diagonal">Diagonal</option>
             <option value="active-area">Active panel dimensions</option>
+            <option value="pixel-density">Pixel density</option>
           </select>
         </label>
         {draft.sizeSource === "diagonal" ? (
@@ -419,7 +450,7 @@ export function DisplayTargetPanel({
             <span>Diagonal (inches)</span>
             <input type="number" min={2} max={300} step={0.1} value={draft.diagonalInches} onInput={(event) => updateSpecification({ diagonalInches: event.currentTarget.value })} />
           </label>
-        ) : (
+        ) : draft.sizeSource === "active-area" ? (
           <>
             <label class="field">
               <span>Active width (mm)</span>
@@ -430,6 +461,11 @@ export function DisplayTargetPanel({
               <input type="number" min={10} max={10000} step={0.01} value={draft.activeHeightMm} onInput={(event) => updateSpecification({ activeHeightMm: event.currentTarget.value })} />
             </label>
           </>
+        ) : (
+          <label class="field span-two">
+            <span>Pixel density (ppi)</span>
+            <input type="number" min={20} max={2000} step={1} value={draft.pixelsPerInch} onInput={(event) => updateSpecification({ pixelsPerInch: event.currentTarget.value })} />
+          </label>
         )}
       </div>
 
@@ -447,7 +483,7 @@ export function DisplayTargetPanel({
           <div><dt>Browser raster</dt><dd>{environment.pixelWidth} × {environment.pixelHeight}</dd></div>
         </dl>
       )}
-      {parsed.profile && !rasterMatches && <p class="display-profile-warning">Browser raster differs from the selected native resolution.</p>}
+      {parsed.profile && !rasterMatches && <p class="display-profile-warning">Browser raster differs from the native resolution. Verify with a ruler.</p>}
       {geometry && !targetFits && <p class="display-profile-warning">The board does not fit this display at the selected square size.</p>}
 
       <div class="button-row display-target-actions">

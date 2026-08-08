@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DISPLAY_SPECIFICATION_PRESETS,
   dictionaryModuleCount,
   displayEnvironment,
   displayEnvironmentKey,
@@ -20,7 +21,7 @@ const specification = {
 };
 
 describe("display target geometry", () => {
-  it("calculates pixel pitch from diagonal or active-area specifications", () => {
+  it("calculates pixel pitch from diagonal, active-area, or PPI specifications", () => {
     expect(estimatedMmPerPixel(specification)).toBeCloseTo(0.2335, 4);
     expect(estimatedMmPerPixel({
       nativeWidthPixels: 2560,
@@ -29,6 +30,31 @@ describe("display target geometry", () => {
       activeWidthMm: 597.6,
       activeHeightMm: 336.2,
     })).toBeCloseTo(0.23345, 5);
+    expect(estimatedMmPerPixel({
+      nativeWidthPixels: 1206,
+      nativeHeightPixels: 2622,
+      sizeSource: "pixel-density",
+      pixelsPerInch: 460,
+    })).toBeCloseTo(25.4 / 460, 8);
+  });
+
+  it("includes published-density presets for iPhone and MacBook displays", () => {
+    expect(DISPLAY_SPECIFICATION_PRESETS.find((preset) => preset.id === "iphone-air")).toMatchObject({
+      group: "iPhone",
+      specification: {
+        nativeWidthPixels: 1260,
+        nativeHeightPixels: 2736,
+        pixelsPerInch: 460,
+      },
+    });
+    expect(DISPLAY_SPECIFICATION_PRESETS.find((preset) => preset.id === "macbook-pro-14.2")).toMatchObject({
+      group: "MacBook",
+      specification: {
+        nativeWidthPixels: 3024,
+        nativeHeightPixels: 1964,
+        pixelsPerInch: 254,
+      },
+    });
   });
 
   it("uses a verification only for the environment where it was measured", () => {
@@ -55,6 +81,22 @@ describe("display target geometry", () => {
       source: "estimated",
       verificationCurrent: false,
     });
+    expect(displayProfileScale(profile, displayEnvironment(1280, 720, 2))).toMatchObject({
+      source: "estimated",
+      verificationCurrent: false,
+    });
+  });
+
+  it("adjusts an estimated scale to the current OS/browser raster", () => {
+    const profile: DisplayProfile = {
+      schemaVersion: 1,
+      id: "scaled-display",
+      name: "Scaled display",
+      specification,
+    };
+    const nativeScale = displayProfileScale(profile, displayEnvironment(2560, 1440, 1));
+    const halfRasterScale = displayProfileScale(profile, displayEnvironment(1280, 720, 1));
+    expect(halfRasterScale.mmPerPixel).toBeCloseTo(nativeScale.mmPerPixel * 2, 8);
   });
 
   it("snaps ChArUco markers to complete dictionary modules", () => {
@@ -94,5 +136,10 @@ describe("display target geometry", () => {
       activeWidthMm: 500,
       activeHeightMm: 500,
     })).toContain("Active panel dimensions do not match the native-resolution aspect ratio.");
+    expect(validateDisplaySpecification({
+      nativeWidthPixels: 1206,
+      nativeHeightPixels: 2622,
+      sizeSource: "pixel-density",
+    })).toContain("Pixel density must be between 20 and 2000 ppi.");
   });
 });

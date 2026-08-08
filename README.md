@@ -44,7 +44,9 @@ The first connection leaves dimensions unset unless the user enters them, allowi
 
 ## Display targets
 
-The browser cannot determine a monitor's physical dimensions. Display profiles therefore use either a diagonal/native-resolution estimate or exact active-panel dimensions. A fullscreen ruler check converts the rendered reference into a measured millimetres-per-pixel scale. Verified profiles are stored locally and require verification again when the browser-reported display raster or pixel ratio changes.
+The browser cannot determine a display's physical dimensions. Display profiles therefore use a diagonal/native-resolution estimate, exact active-panel dimensions, or a published pixel density. The preset list includes common monitors plus iPhone and MacBook panel families. A fullscreen ruler check converts the rendered reference into a measured millimetres-per-pixel scale.
+
+The initial scale follows the current browser raster and `devicePixelRatio`. macOS scaled modes, iPhone Display Zoom, browser zoom, and compositor resampling can still alter the effective output. Published PPI is therefore an estimate until checked with the ruler. Verified profiles are stored locally and require verification again when either the browser-reported display raster or pixel ratio changes.
 
 Displayed boards are generated on whole device-pixel boundaries. ChArUco marker sides are snapped to complete dictionary modules, and the UI reports the resulting square, marker, and full-board dimensions. A specification-only profile is marked as estimated; ruler-checked profiles are marked as verified.
 
