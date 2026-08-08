@@ -1393,14 +1393,11 @@ export function App() {
   return (
     <div class="app-shell">
       <header class="site-header">
-        <div class="brand"><strong>Web Camera Calibration Tool</strong></div>
+        <div class="brand"><h1>Web Camera Calibration Tool</h1></div>
       </header>
 
       <main>
-        <div class="hero-copy">
-          <h1>Camera calibration</h1>
-          <p>{patternLabel(session.pattern)} · {session.lensModel === "pinhole-radtan5" ? "Standard lens" : "Fisheye"}</p>
-        </div>
+        <p class="configuration-summary">{patternLabel(session.pattern)} · {session.lensModel === "pinhole-radtan5" ? "Standard lens" : "Fisheye"}</p>
         <Stepper step={session.step} />
 
         {error && <Status tone="error">{error}</Status>}

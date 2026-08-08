@@ -42,9 +42,9 @@ describe("application shell", () => {
   it("initializes the calibration engine and exposes bounded target controls", async () => {
     render(<App />);
 
-    expect(screen.getByText("Web Camera Calibration Tool")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Web Camera Calibration Tool", level: 1 })).toBeTruthy();
     expect(screen.queryByText("Local processing")).toBeNull();
-    expect(screen.getByRole("heading", { name: "Camera calibration" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Camera calibration" })).toBeNull();
     await waitFor(() => {
       const button = screen.getByRole("button", { name: "Download board SVG" });
       expect((button as HTMLButtonElement).disabled).toBe(false);

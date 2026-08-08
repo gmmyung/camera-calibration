@@ -107,18 +107,10 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   justify-content: space-between;
   border-bottom: 1px solid var(--line);
 }
-.brand strong { font-size: 15px; font-weight: 650; }
+.brand h1 { margin: 0; font-size: 15px; font-weight: 650; }
 
 main { flex: 1; padding: 28px 0 48px; }
-.hero-copy {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 18px;
-}
-.hero-copy h1 { margin: 0; font-size: 25px; line-height: 1.2; font-weight: 650; }
-.hero-copy p { margin: 0; color: var(--muted); font-size: 13px; }
+.configuration-summary { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
 .muted { color: var(--muted); line-height: 1.45; }
 
 .stepper {
@@ -402,9 +394,6 @@ footer button { padding: 4px 7px; border: 0; border-bottom: 1px solid var(--fain
   .app-shell { width: min(100% - 20px, 1200px); }
   .site-header { min-height: 48px; }
   main { padding-top: 20px; }
-  .hero-copy { display: block; }
-  .hero-copy h1 { font-size: 21px; }
-  .hero-copy p { margin-top: 5px; }
   .stepper li { justify-content: center; padding: 0 5px; font-size: 11px; }
   .stepper li span { display: none; }
   .panel { padding: 13px; }
