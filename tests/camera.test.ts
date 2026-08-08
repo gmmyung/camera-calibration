@@ -12,14 +12,17 @@ function fakeTrack(
     readyState: "live",
     stop: vi.fn(),
     applyConstraints: vi.fn().mockResolvedValue(undefined),
-    getSettings: vi.fn(() => ({
-      width: 1280,
-      height: 720,
-      deviceId: "camera-1",
-      frameRate: 30,
-      resizeMode: "none",
-      ...options.settings,
-    })),
+    getSettings: vi.fn(
+      () =>
+        ({
+          width: 1280,
+          height: 720,
+          deviceId: "camera-1",
+          frameRate: 30,
+          resizeMode: "none",
+          ...options.settings,
+        }) as MediaTrackSettings & { resizeMode?: string },
+    ),
     ...(options.capabilities
       ? { getCapabilities: vi.fn(() => options.capabilities) }
       : {}),
@@ -126,7 +129,59 @@ describe("CameraController", () => {
     expect(controller.settings().resizeMode).toBeUndefined();
 
     await controller.applyResolution({ width: 1280, height: 720 });
+    expect(track.applyConstraints).not.toHaveBeenCalled();
+
+    track.applyConstraints.mockImplementationOnce(async () => {
+      track.getSettings.mockReturnValue({
+        width: 640,
+        height: 480,
+        deviceId: "camera-1",
+        frameRate: 30,
+        resizeMode: undefined,
+      });
+    });
+    await controller.applyResolution({ width: 640, height: 480 });
     expect(track.applyConstraints.mock.calls[0]![0]).not.toHaveProperty("resizeMode");
+  });
+
+  it("waits for reported dimensions to settle after applying constraints", async () => {
+    vi.useFakeTimers();
+    const track = fakeTrack();
+    const getUserMedia = vi.fn().mockResolvedValue(fakeStream(track));
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: getUserMedia });
+    const controller = new CameraController();
+    const opening = controller.open({ width: 1280, height: 720 });
+    await vi.runAllTimersAsync();
+    await opening;
+
+    track.getSettings
+      .mockReturnValueOnce({ width: 1280, height: 720, frameRate: 30, resizeMode: "none" })
+      .mockReturnValueOnce({ width: 1280, height: 720, frameRate: 30, resizeMode: "none" })
+      .mockReturnValueOnce({ width: 640, height: 480, frameRate: 30, resizeMode: "none" });
+    const applying = controller.applyResolution({ width: 640, height: 480 });
+    await vi.runAllTimersAsync();
+
+    await expect(applying).resolves.toMatchObject({ width: 640, height: 480 });
+    expect(track.applyConstraints).toHaveBeenCalledOnce();
+  });
+
+  it("reports both requested and observed dimensions after settling fails", async () => {
+    vi.useFakeTimers();
+    const track = fakeTrack();
+    const getUserMedia = vi.fn().mockResolvedValue(fakeStream(track));
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: getUserMedia });
+    const controller = new CameraController();
+    const opening = controller.open({ width: 1280, height: 720 });
+    await vi.runAllTimersAsync();
+    await opening;
+
+    const applying = controller.applyResolution({ width: 640, height: 480 });
+    const rejection = expect(applying).rejects.toThrow(
+      "The camera reported 1280 × 720 after 640 × 480 was requested.",
+    );
+    await vi.runAllTimersAsync();
+
+    await rejection;
   });
 
   it("rejects a stream when a supported browser does not confirm resizeMode none", async () => {

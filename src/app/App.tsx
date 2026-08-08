@@ -812,16 +812,21 @@ export function App() {
     captureGateRef.current.reset();
   }, [removeObservationData]);
 
-  const commitCameraSettings = useCallback(async (settings: CameraSettingsSnapshot) => {
+  const commitCameraSettings = useCallback(async (
+    settings: CameraSettingsSnapshot,
+    syncResolutionDraft = true,
+  ) => {
     const pipelineChanged =
       sessionRef.current.observations.length > 0 &&
       cameraPipelineChanged(sessionRef.current.captureSettings, settings);
     if (pipelineChanged) await clearObservations();
     setCapabilities(cameraRef.current.capabilities());
-    setResolutionDraft({
-      width: String(settings.width),
-      height: String(settings.height),
-    });
+    if (syncResolutionDraft) {
+      setResolutionDraft({
+        width: String(settings.width),
+        height: String(settings.height),
+      });
+    }
     setSession((previous) =>
       updated(previous, { captureSettings: settings, imageSize: settings }),
     );
@@ -907,8 +912,16 @@ export function App() {
       }
     } catch (cameraError) {
       if (!isOperationCancellation(cameraError)) {
+        let pipelineChanged = false;
+        try {
+          pipelineChanged = await commitCameraSettings(cameraRef.current.settings(), false);
+        } catch {
+          // The original camera error is more useful if the track also ended.
+        }
         setStatus(undefined);
-        setError(errorText(cameraError));
+        setError(
+          `${errorText(cameraError)}${pipelineChanged ? " Previous captures were cleared because the stream changed." : ""}`,
+        );
       }
     } finally {
       cameraBusyRef.current = false;

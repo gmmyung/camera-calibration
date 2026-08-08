@@ -49,6 +49,18 @@ function unscaledCaptureConstraint(supported: boolean): ExtendedConstraints {
   return supported ? { resizeMode: { exact: "none" } } : {};
 }
 
+function hasExactSettings(
+  settings: CameraSettingsSnapshot,
+  requestedSize: ImageSize | undefined,
+  resizeModeSupported: boolean,
+): boolean {
+  return (
+    (!resizeModeSupported || settings.resizeMode === "none") &&
+    (!requestedSize ||
+      (settings.width === requestedSize.width && settings.height === requestedSize.height))
+  );
+}
+
 function videoConstraints(
   request: CameraRequest,
   resizeModeSupported: boolean,
@@ -93,6 +105,8 @@ function validateRequest(request: CameraRequest): void {
 const CAMERA_RELEASE_DELAY_MS = 300;
 const CAPTURE_RETRY_DELAY_MS = 500;
 const TRACK_STARTUP_GRACE_MS = 100;
+const SETTINGS_SETTLE_DELAY_MS = 80;
+const SETTINGS_SETTLE_RETRIES = 3;
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => globalThis.setTimeout(resolve, milliseconds));
@@ -161,15 +175,17 @@ export class CameraController {
     const resizeModeSupported = supportsResizeMode();
     const track = this.requireTrack();
     const operationId = this.operationId;
+    const current = this.settingsForTrack(track);
+    if (hasExactSettings(current, size, resizeModeSupported)) return current;
     await track.applyConstraints({
       width: { exact: size.width },
       height: { exact: size.height },
       ...unscaledCaptureConstraint(resizeModeSupported),
     } as ExtendedConstraints);
     this.assertActiveTrack(operationId, track);
-    const settings = this.settings();
-    this.assertExactSettings(settings, size, resizeModeSupported);
-    return settings;
+    return this.settledExactSettings(track, size, resizeModeSupported, () =>
+      this.assertActiveTrack(operationId, track),
+    );
   }
 
   async applyZoom(zoom: number): Promise<CameraSettingsSnapshot> {
@@ -185,9 +201,9 @@ export class CameraController {
       advanced: [{ zoom }],
     } as ExtendedConstraints);
     this.assertActiveTrack(operationId, track);
-    const settings = this.settings();
-    this.assertExactSettings(settings, current, resizeModeSupported);
-    return settings;
+    return this.settledExactSettings(track, current, resizeModeSupported, () =>
+      this.assertActiveTrack(operationId, track),
+    );
   }
 
   async applyFocusMode(focusMode: string): Promise<CameraSettingsSnapshot> {
@@ -203,9 +219,9 @@ export class CameraController {
       advanced: [{ focusMode }],
     } as ExtendedConstraints);
     this.assertActiveTrack(operationId, track);
-    const settings = this.settings();
-    this.assertExactSettings(settings, current, resizeModeSupported);
-    return settings;
+    return this.settledExactSettings(track, current, resizeModeSupported, () =>
+      this.assertActiveTrack(operationId, track),
+    );
   }
 
   capabilities(): ExtendedCapabilities | undefined {
@@ -273,12 +289,18 @@ export class CameraController {
       throw captureFailure("The camera video track ended while starting.");
     }
     try {
-      this.assertExactSettings(
-        this.settingsForTrack(track),
+      await this.settledExactSettings(
+        track,
         request.width === undefined || request.height === undefined
           ? undefined
           : { width: request.width, height: request.height },
         resizeModeSupported,
+        () => {
+          this.assertCurrent(operationId, stream);
+          if (track.readyState === "ended") {
+            throw captureFailure("The camera video track ended while starting.");
+          }
+        },
       );
     } catch (error) {
       stopStream(stream);
@@ -306,6 +328,28 @@ export class CameraController {
     };
   }
 
+  private async settledExactSettings(
+    track: MediaStreamTrack,
+    requestedSize: ImageSize | undefined,
+    resizeModeSupported: boolean,
+    assertUsable: () => void,
+  ): Promise<CameraSettingsSnapshot> {
+    assertUsable();
+    let settings = this.settingsForTrack(track);
+    for (
+      let retry = 0;
+      retry < SETTINGS_SETTLE_RETRIES &&
+      !hasExactSettings(settings, requestedSize, resizeModeSupported);
+      retry += 1
+    ) {
+      await wait(SETTINGS_SETTLE_DELAY_MS);
+      assertUsable();
+      settings = this.settingsForTrack(track);
+    }
+    this.assertExactSettings(settings, requestedSize, resizeModeSupported);
+    return settings;
+  }
+
   private assertExactSettings(
     settings: CameraSettingsSnapshot,
     requestedSize?: ImageSize,
@@ -319,7 +363,7 @@ export class CameraController {
       (settings.width !== requestedSize.width || settings.height !== requestedSize.height)
     ) {
       throw new Error(
-        `The camera did not provide the exact requested mode (${requestedSize.width} × ${requestedSize.height}).`,
+        `The camera reported ${settings.width} × ${settings.height} after ${requestedSize.width} × ${requestedSize.height} was requested.`,
       );
     }
   }
