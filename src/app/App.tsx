@@ -1472,7 +1472,7 @@ export function App() {
         )}
       </main>
 
-      <footer><button type="button" onClick={() => void resetEverything()}>Delete local data</button><span>{opencvVersion ? `OpenCV ${opencvVersion}` : "OpenCV unavailable"}</span></footer>
+      <footer><button type="button" onClick={() => void resetEverything()}>Delete local data</button><div class="footer-meta"><a href="https://github.com/gmmyung/camera-calibration" target="_blank" rel="noopener noreferrer">GitHub</a><span>{opencvVersion ? `OpenCV ${opencvVersion}` : "OpenCV unavailable"}</span></div></footer>
 
       {restoreCandidate && !restoreResolved && <div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="restore-title"><h2 id="restore-title">Restore session?</h2><p>{restoreCandidate.observations.length} views saved {new Date(restoreCandidate.updatedAt).toLocaleString()}.</p><div class="button-row"><button type="button" class="button secondary" disabled={restoreBusy} onClick={() => void discardRestore()}>{restoreBusy ? "Discarding…" : "Discard"}</button><button type="button" class="button primary" disabled={restoreBusy} onClick={() => { sessionGenerationRef.current += 1; setSession(restoreCandidate); setRestoreCandidate(undefined); setRestoreResolved(true); setStatus("Saved session restored."); }}>Restore</button></div></div></div>}
     </div>

@@ -377,7 +377,8 @@ footer {
   color: var(--muted);
   font-size: 10px;
 }
-footer button { padding: 4px 7px; border: 0; border-bottom: 1px solid var(--faint); background: transparent; color: var(--muted); cursor: pointer; }
+footer button, footer a { padding: 4px 7px; border: 0; border-bottom: 1px solid var(--faint); background: transparent; color: var(--muted); cursor: pointer; }
+.footer-meta { display: flex; align-items: center; gap: 14px; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 20px; background: rgba(0,0,0,.78); }
 .modal { width: min(440px, 100%); padding: 22px; border: 1px solid var(--line); background: var(--panel); }
 .modal h2 { margin: 0; font-size: 17px; }

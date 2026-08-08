@@ -59,5 +59,8 @@ describe("application shell", () => {
     expect(connectButton.closest(".empty-preview")).not.toBeNull();
     expect(screen.queryByText("Print at 100%. Verify the 100 mm ruler.")).toBeNull();
     expect(screen.getByText("OpenCV 4.13.0-test")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "GitHub" }).getAttribute("href")).toBe(
+      "https://github.com/gmmyung/camera-calibration",
+    );
   });
 });
