@@ -49,7 +49,7 @@ describe("calibration worker client", () => {
     const moduleUrl = new URL(request.moduleUrl);
     expect(request.type).toBe("INIT");
     expect(moduleUrl.pathname).toMatch(/\/wasm\/calibration\.js$/);
-    expect(moduleUrl.searchParams.get("v")).toBe("0.1.0");
+    expect(moduleUrl.searchParams.get("v")).toBe(__BUILD_ID__);
     worker.respond({
       id: request.id,
       ok: true,
